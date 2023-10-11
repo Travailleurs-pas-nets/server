@@ -3,6 +3,11 @@
  * though for a production version it would be advised not to (and to write those infos in log
  * files).
  */
+
+///////////////////////////////////////////////////////////////////////////////
+//                         PROGRAMME INITIALISATION                          //
+///////////////////////////////////////////////////////////////////////////////
+#pragma region Programme initialisation
 #include <stdlib.h>
 #include <stdio.h>
 #include <linux/types.h>    /* For the sockets */
@@ -13,9 +18,10 @@
 #include <time.h>           /* To get the date and time */
 #include <math.h>           /* To get pow() and floor() functions */
 #include <stdbool.h>        /* For booleans...... */
+#include <stdarg.h>         /* For variadic functions */
 #define MAX_NAME_LENGTH 256
 #define MAX_MESSAGE_LENGTH 1024
-#define PORT_NUMBER 5001
+#define PORT_NUMBER 5000
 #define REQUEST_QUEUE_SIZE 5
 #define DEBUG 1
 
@@ -31,6 +37,16 @@ typedef struct sockaddr_in sockaddr_in;
 typedef struct hostent hostent;
 typedef struct servent servent;
 
+#pragma endregion Programme initialisation
+
+///////////////////////////////////////////////////////////////////////////////
+//                            FRAMEWORK FUNCTIONS                            //
+///////////////////////////////////////////////////////////////////////////////
+#pragma region Framework functions
+
+/**
+ * Function that returns the current time (when calling the method) as a char array.
+ */
 char *getTime() {
     time_t rawTime = time(NULL);
     char *charTime = ctime(&rawTime);
@@ -39,6 +55,9 @@ char *getTime() {
     return charTime;
 }
 
+/**
+ * Function that converts an integer in a char array.
+*/
 char *intToChars(int in) {
     char *result;
     int nextIndex = 0;
@@ -72,8 +91,39 @@ char *intToChars(int in) {
     return result;
 }
 
+/**
+ * Function that concatenates the given amount parameters.
+ */
+char *concat(unsigned short argCount, ...) {
+    va_list argList;
+    char *concatenated;
+    int size = 1;
+    
+    va_start(argList, argCount);
+    for (int i = 0; i < argCount; i++) {
+        size += strlen(va_arg(argList, char *));
+    }
+    va_end(argList);
+    
+    concatenated = malloc(size + 1);
+    *concatenated = '\0';
+
+    va_start(argList, argCount);
+    for (int i = 0; i < argCount; i++) {
+        strcat(concatenated, va_arg(argList, char *));
+    }
+    va_end(argList);
+
+    return concatenated;
+}
+
+/**
+ * Function that flushes the console output in debug mode.
+ */
 void flushOutput() {
-    printf("\n");
+    if (DEBUG == 1) {
+        printf("\n");
+    }
 }
 
 /**
@@ -81,12 +131,8 @@ void flushOutput() {
  * If the debug mode is enabled, these will be displayed in the terminal, otherwise they will be
  * written to a log file.
  */
-void handleError(char *message, char *charTime) {
-    char *errorMessage = malloc(strlen(message) + strlen(charTime) + 13); // 13 being for additional characters & \0.
-    strcpy(errorMessage, "[ERROR] ");
-    strcat(errorMessage, charTime);
-    strcat(errorMessage, ": ");
-    strcat(errorMessage, message);
+void handleError(char *errorTag, char *message, char *charTime) {
+    char *errorMessage = concat(5, errorTag, " ", charTime, ": ", message);
 
     if (DEBUG == 1) {
         perror(errorMessage);
@@ -94,7 +140,24 @@ void handleError(char *message, char *charTime) {
         // TODO (writing in a log file)
     }
 
-    free(errorMessage);
+    //free(errorMessage);
+}
+
+/**
+ * Function that handles runtime errors.
+ * These errors takes the `[ERROR]` tag.
+ */
+void handleRuntimeError(char *message, char *charTime) {
+    handleError("[ERROR]", message, charTime);
+}
+
+/**
+ * Function that handles critical errors.
+ * These errors takes the `[CRITICAL]` tag and causes the program to stop.
+*/
+void handleCriticalError(char *message, char *charTime) {
+    handleError("[CRITICAL]", message, charTime);
+    exit(1);
 }
 
 /**
@@ -107,6 +170,84 @@ void debug(const char *messageTemplate, char *charTime, char *content) {
         printf(messageTemplate, charTime, content);
     }
 }
+
+#pragma endregion Framework functions
+
+///////////////////////////////////////////////////////////////////////////////
+//                        SERVER FRAMEWORK FUNCTIONS                         //
+///////////////////////////////////////////////////////////////////////////////
+#pragma region Server framework functions
+
+/**
+ * Wrapper for the unix `gethostname()` function. This allows normalised calls to standard methods.
+*/
+char *getMachineName() {
+    char *machineName = malloc(MAX_NAME_LENGTH + 1);
+    gethostname(machineName, MAX_NAME_LENGTH);
+    return machineName;
+}
+
+/**
+ * Function that will create and return a pointer towards the hostent.
+ * It will throw a critical error if the retrieved host is null before return.
+ */
+hostent *retrieveHost() {
+    hostent *host;
+    char *hostName;
+    
+    hostName = getMachineName();
+    host = gethostbyname(hostName);
+
+    if (host == NULL) {
+        char *errorMessage = concat(3, "Server not found ('", hostName, "')");
+        handleCriticalError(errorMessage, getTime());
+    }
+
+    return host;
+}
+
+/**
+ * Will configure the local address to the given host and port.
+ */
+sockaddr_in configureLocalAddress(hostent *host, unsigned short port) {
+    sockaddr_in localAddress;
+
+    bcopy((char *)host->h_addr, (char *)&localAddress.sin_addr, host->h_length);
+    localAddress.sin_family = host->h_addrtype;
+    localAddress.sin_addr.s_addr = INADDR_ANY;
+
+    localAddress.sin_port = htons(port);
+
+    return localAddress;
+}
+
+int configureConnectionSocket(sockaddr_in localAddress) {
+    int connectionSocketDescriptor;
+    int operationResultCode;
+
+    connectionSocketDescriptor = socket(AF_INET, SOCK_STREAM, 0);
+    if (connectionSocketDescriptor < 0) {
+        handleCriticalError("Failed to create the connection socket", getTime());
+    }
+
+    operationResultCode = bind(
+        connectionSocketDescriptor,
+        (sockaddr *)&localAddress,
+        sizeof(localAddress)
+    );
+    if (operationResultCode < 0) {
+        handleCriticalError("Failed to bind the socket to the connection address", getTime());
+    }
+
+    return connectionSocketDescriptor;
+}
+
+#pragma endregion Server framework functions
+
+///////////////////////////////////////////////////////////////////////////////
+//                              FLOW FUNCTIONS                               //
+///////////////////////////////////////////////////////////////////////////////
+#pragma region Flow functions
 
 /**
  * This function will separate the option code from the message content.
@@ -133,15 +274,19 @@ void dispatchRequest(int optionCode, char *messageContent, char *messageBuffer, 
 
         default:
             /* Invalid code => displaying the error */
-            errorMessage = malloc(strlen(messageBuffer) + 25);
-            strcpy(errorMessage, "Invalid option code ('");
-            strcat(errorMessage, messageBuffer);
-            strcat(errorMessage, "')");
+            errorMessage = concat(3, "Invalid option code ('", messageBuffer, "')");
 
-            handleError(errorMessage, charTime);
+            handleRuntimeError(errorMessage, charTime);
             free(errorMessage);
     }
 }
+
+#pragma endregion Flow functions
+
+///////////////////////////////////////////////////////////////////////////////
+//                         MAIN ALGORITHM FUNCTIONS                          //
+///////////////////////////////////////////////////////////////////////////////
+#pragma region Main algorithm functions
 
 /**
  * This function is the one that will handle every request.
@@ -165,7 +310,7 @@ void handleRequest(int socket) {
     /* Reading request content */
     messageLength = read(socket, messageBuffer, sizeof(messageBuffer));
     if (messageLength <= 0) {
-        handleError("Empty message received", charTime);
+        handleRuntimeError("Empty message received", charTime);
     }
     debug("[INFO] %s: Message received => '%s'\n", charTime, messageBuffer);
 
@@ -178,52 +323,20 @@ int main(int argc, char **argv) {
     int connectionSocketDescriptor;
     int transmissionSocketDescriptor;
     int currentAddressLength;
-    int operationResultCode;
     sockaddr_in localAddress;
     sockaddr_in currentClientAddress;
     hostent *hostPointer;
-    servent *servicePointer;
-    char machineName[MAX_NAME_LENGTH + 1];
-    char *errorMessage;
-    char *charTime = getTime();
+    
 
-    gethostname(machineName, MAX_NAME_LENGTH);
+    /* Setting up the server*/
+    hostPointer = retrieveHost();
+    localAddress = configureLocalAddress(hostPointer, PORT_NUMBER);
+    connectionSocketDescriptor = configureConnectionSocket(localAddress);
 
-    hostPointer = gethostbyname(machineName);
-    if (hostPointer == NULL) {
-        errorMessage = malloc(strlen(machineName) + 23);
-        strcpy(errorMessage, "Server not found  ('");
-        strcat(errorMessage, machineName);
-        strcat(errorMessage, "')");
 
-        handleError(errorMessage, charTime);
-        free(errorMessage);
-        exit(1);
-    }
-
-    bcopy((char *)hostPointer->h_addr, (char *)&localAddress.sin_addr, hostPointer->h_length);
-    localAddress.sin_family = hostPointer->h_addrtype;
-    localAddress.sin_addr.s_addr = INADDR_ANY;
-
-    localAddress.sin_port = htons(PORT_NUMBER);
-
-    connectionSocketDescriptor = socket(AF_INET, SOCK_STREAM, 0);
-    if (connectionSocketDescriptor < 0) {
-        exit(1);
-    }
-
-    operationResultCode = bind(
-        connectionSocketDescriptor,
-        (sockaddr *)&localAddress,
-        sizeof(localAddress)
-    );
-    if (operationResultCode < 0) {
-        handleError("Failed to bind the socket to the connection address", charTime);
-        exit(1);
-    }
-
+    /* Handling requests */
     listen(connectionSocketDescriptor, REQUEST_QUEUE_SIZE);
-    debug("[INFO] %s: Server started listening on port %s\n", charTime, intToChars(PORT_NUMBER));
+    debug("[INFO] %s: Server started listening on port %s\n", getTime(), intToChars(PORT_NUMBER));
 
     for (;;) {
         currentAddressLength = sizeof(currentClientAddress);
@@ -231,17 +344,18 @@ int main(int argc, char **argv) {
         transmissionSocketDescriptor = accept(
             connectionSocketDescriptor,
             (sockaddr *)&currentClientAddress,
-            &currentAddressLength
+            (unsigned int *restrict)&currentAddressLength
         );
         if (transmissionSocketDescriptor < 0) {
-            handleError("Connection with client failed", getTime());
+            handleRuntimeError("Connection with client failed", getTime());
             continue;
         }
 
         debug("[INFO] %s: Request being received... %s\n", getTime(), "");
-
         handleRequest(transmissionSocketDescriptor);
         close(transmissionSocketDescriptor);
         flushOutput();
     }
 }
+
+#pragma endregion Main algorithm functions
