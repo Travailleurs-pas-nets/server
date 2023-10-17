@@ -14,10 +14,12 @@ The option code ranges from the first to until the twenty-fourth character (both
 The content ranges from the twenty-fifth character until the end (1024 char max), and its value will vary according to the option code associated.
 
 #### Option codes
-| Code | Meaning                      | Expected content                                         |
-|------|------------------------------|----------------------------------------------------------|
-| `00` | Subscription to a discussion | The name of the channel the client wants to subscribe to |
-| `01` | Sending a message            | The content of the message                               |
+| Code | Meaning                                 | Expected content                                                         |
+|------|-----------------------------------------|--------------------------------------------------------------------------|
+| `00` | Subscription to a discussion            | The name of the channel the client wants to subscribe to                 |
+| `01` | Cancelling subscription to a discussion | The name of the channel the client wants to cancel their subscription to |
+| `02` | Sending a message                       | The content of the message                                               |
+| `03` | Asking eco-score command                | The name of the channel the client wants the eco score from              |
 
 ## Standard flow
 When the server receives a request from a client to subscribe to a discussion, it will at first check if the discussion already exists.  
