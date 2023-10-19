@@ -27,9 +27,17 @@
 
 /** Defining option codes */
 #define OPTION_CODE_LENGTH 24
-#define OPTION_MAX_CODE 1   /* Needs to be equal to the greatest option code! */
-#define OPTION_SEND_MESSAGE 0
-#define OPTION_SUBSCRIBE 1
+#define OPTION_SUBSCRIBE 0
+#define OPTION_UNSUBSCRIBE 1
+#define OPTION_SEND_MESSAGE 2
+#define OPTION_GET_ECO_SCORE 3
+
+/** Defining eco-score computation constants */
+#define ECO_MAX_POLLUTANT_WORDS_TOLERATED 15
+#define ECO_LENGTH_PENALTY_0_BOUNDARY 150 // chars
+#define ECO_LENGTH_PENALTY_1_BOUNDARY 250 // chars
+#define ECO_LENGTH_PENALTY_2_BOUNDARY 600 // chars
+
 
 /** Defining the structures */
 typedef struct sockaddr sockaddr;
@@ -259,6 +267,154 @@ void parseMessage(char *messageBuffer, char *messageContent, int *optionCode) {
 }
 
 /**
+ * Function that will iterate through the words within the message from the client, trying to
+ * identify pollutant or ecological words, and editing the content of the three last variables
+ * accordingly.
+*/
+void browseForPollutantsAndEcologicalWords(char **messageWords, 
+        char **pollutantWords, int *pollutantWordsCount, int *ecologicalWordsCount) {
+    // TODO:
+    // - Create the lists of pollutant and ecological words.
+    // - Updating the right variable(s) on the fly.
+}
+
+/**
+ * Function that computes the eco-penalty depending on the message length
+ */
+short computeMessageLengthEcoPenalty(int charCount) {
+    if (charCount <= ECO_LENGTH_PENALTY_0_BOUNDARY) {
+        return 0;
+    } else if (charCount <= ECO_LENGTH_PENALTY_1_BOUNDARY) {
+        return 1;
+    } else if (charCount <= ECO_LENGTH_PENALTY_2_BOUNDARY) {
+        return 2;
+    } else {
+        return 3;
+    }
+}
+
+/**
+ * This function will compute the eco-value of a message. This value will then have to be added to
+ * the current eco-value. It may be negative.
+ */
+short computeMessageEcoValue(char *messageContent) {
+    char **messageWords;
+    char **pollutantWords;
+    int deltaPollutantAndEcologicalWords;
+    int pollutantWordsCount = 0;
+    int ecologicalWordsCount = 0;
+
+    debug("[INFO] %s: Computing eco-value for the message from '%s'", getTime(), "???");
+
+    // TODO:
+    // - Split the message in words (by ' ').
+    messageWords = malloc(0);
+
+
+    pollutantWords = malloc(0); // TODO: replace 0 by the amount of words in the message
+    browseForPollutantsAndEcologicalWords(
+        messageWords,
+        pollutantWords,
+        &pollutantWordsCount,
+        &ecologicalWordsCount
+    );
+    deltaPollutantAndEcologicalWords = ecologicalWordsCount - pollutantWordsCount;
+
+    if ((-1) * deltaPollutantAndEcologicalWords > ECO_MAX_POLLUTANT_WORDS_TOLERATED) {
+        // TODO:
+        // - Replace all pollutant words (gathered within the pollutantWords array) for ecological
+        //   ones.
+        // - Return the opposite of the current eco-value (so that it becomes 0).
+    }
+
+    /* We want to cap the increase at the same value as we tolerate pollutant words. */
+    return (deltaPollutantAndEcologicalWords > ECO_MAX_POLLUTANT_WORDS_TOLERATED?
+                ECO_MAX_POLLUTANT_WORDS_TOLERATED: deltaPollutantAndEcologicalWords
+        ) - computeMessageLengthEcoPenalty(strlen(messageContent));
+}
+
+/**
+ * This function will add the given eco-value to the current eco-score.
+ */
+void updateEcoScore(short ecoValue) {
+    // TODO:
+    // - Check that 2+1, with 2 being unsigned and 2 being signed (both shorts) equals 3.
+    // - Change the eco-score value by adding the given eco-value to the stored eco-score.
+
+    // call to getter may be removed later because we will have the value there.
+    // +, not sure the default conversion from unsigned short to int is valid.
+    debug("[INFO] %s: New eco-score = %s", getTime(), intToChars(getEcoScore()));
+}
+
+/**
+ * Retrieves the eco-score for the current user in the current channel.
+ */
+unsigned short getEcoScore() {
+    // TODO:
+    // - Store the eco-score somewhere it is possible to retrieve during a request.
+}
+
+/**
+ * Will iterate through the list of users subscribed to the current channel, and send the message
+ * to all of them.
+*/
+void deliverMessage(char *messageContent) {
+    debug("[INFO] %s: delivering the message '%s'", getTime(), messageContent);
+
+    // TODO:
+    // - Prepare a request for the client, containing the response (and potentially the name of the
+    //   sender).
+    // - Iterate through the list of subscribers for the current channel and send the message to
+    //   each of them.
+
+    debug("[INFO] %s: Message delivered to channel '%s'", getTime(), "???");
+}
+
+/**
+ * This function will subscribe the current user to the given channel (identified via its name).
+ * If there is no corresponding channel, and still room in the allocated array for channels, it
+ * will automatically be created.
+ */
+void subscribeTo(char *channelName) {
+    // TODO
+}
+
+/**
+ * This function will unsubscribe the current user from the given channel (identified via its name).
+ * If the user is the only one subscribed to that specific channel, it will be deleted.
+ */
+void unsubscribeFrom(char *channelName) {
+    // TODO
+}
+
+/**
+ * This function will send the message given to all the users connected to the same channel as the
+ * current one.
+ * At the same time, it will compute the eco-value of the message and update the user's eco-score
+ * accordingly.
+*/
+void sendMessage(char *messageContent) {
+    // updating the eco-score:
+    short messageEcoValue = computeMessageEcoValue(messageContent);
+    updateEcoScore(messageEcoValue);
+
+    // delivering the message to the subscribed clients
+    deliverMessage(messageContent);
+}
+
+/**
+ * Function that gets the eco-score for the current client, and formats it into a request before to
+ * send the result back to the client.
+ */
+void communicateEcoScore() {
+    unsigned short ecoScore = getEcoScore();
+
+    // TODO:
+    // - Encapsulate the score into a response request
+    // - Send the newly built request back to the client
+}
+
+/**
  * Dispatches the request to the right function according to the received option code.
  * If no option code matches, this function will display an error message.
  */
@@ -266,10 +422,20 @@ void dispatchRequest(int optionCode, char *messageContent, char *messageBuffer, 
     char *errorMessage;
 
     switch (optionCode) {
-        case OPTION_SEND_MESSAGE:
+        case OPTION_SUBSCRIBE:
+            subscribeTo(messageContent);
             break;
 
-        case OPTION_SUBSCRIBE:
+        case OPTION_UNSUBSCRIBE:
+            unsubscribeFrom(messageContent);
+            break;
+
+        case OPTION_SEND_MESSAGE:
+            sendMessage(messageContent);
+            break;
+
+        case OPTION_GET_ECO_SCORE:
+            communicateEcoScore();
             break;
 
         default:
@@ -301,22 +467,22 @@ void dispatchRequest(int optionCode, char *messageContent, char *messageBuffer, 
  * These should contain the option code (`01`) for subscription and (`00`) for sending a message.
  */
 void handleRequest(int socket) {
-    char messageBuffer[MAX_MESSAGE_LENGTH];
+    char messageBuffer[MAX_MESSAGE_LENGTH] = {0};
     int messageLength;
     char *messageContent;
     int optionCode;
-    char *charTime = getTime();
 
     /* Reading request content */
     messageLength = read(socket, messageBuffer, sizeof(messageBuffer));
     if (messageLength <= 0) {
-        handleRuntimeError("Empty message received", charTime);
+        handleRuntimeError("Empty message received", getTime());
     }
-    debug("[INFO] %s: Message received => '%s'\n", charTime, messageBuffer);
+    debug("[INFO] %s: Message received => '%s'\n", getTime(), messageBuffer);
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
     parseMessage(messageBuffer, messageContent, &optionCode);
-    dispatchRequest(optionCode, messageContent, messageBuffer, charTime);
+    dispatchRequest(optionCode, messageContent, messageBuffer, getTime());
+    free(messageContent);
 }
 
 int main(int argc, char **argv) {
