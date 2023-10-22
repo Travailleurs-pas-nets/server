@@ -19,6 +19,11 @@
 #include <math.h>           /* To get pow() and floor() functions */
 #include <stdbool.h>        /* For booleans...... */
 #include <stdarg.h>         /* For variadic functions */
+#include <lua.h>            /* Lua lib, allowing to incorporate Lua code to C programs */
+#include <lauxlib.h>
+#include <lualib.h>
+#define LUA_STACK_TOP -1
+#define LUA_MIN_SWAP_LENGTH 3
 #define MAX_NAME_LENGTH 256
 #define MAX_MESSAGE_LENGTH 1024
 #define PORT_NUMBER 5000
@@ -123,6 +128,51 @@ char *concat(unsigned short argCount, ...) {
     va_end(argList);
 
     return concatenated;
+}
+
+/**
+ * Function that splits a string into an array of strings, using the given delimiter.
+ */
+char **split(char *stringToSplit, char delimiter, unsigned short *wordCount) {
+    char *token;
+    char **tokens;
+    unsigned short delimiterCount = 0;
+    *wordCount = 0;
+
+    // First, we iterate through the string to find the number of times the delimiter is present.
+    for (int i = 0; stringToSplit[i] != '\0'; i++) {
+        if (stringToSplit[i] == delimiter) {
+            delimiterCount++;
+        }
+    }
+
+    // Then we create an array of a capacity of 1 more than the delimiter count (because there is
+    // one more element than there are delimiters).
+    tokens = malloc(sizeof(char *) * (delimiterCount + 1));
+
+    // And finally we fill our array with strings.
+    token = strtok(stringToSplit, delimiter);
+    while (token) {
+        tokens[*wordCount] = token;
+        *wordCount++;
+        token = strtok(NULL, delimiter);
+    }
+    
+    return tokens;
+}
+
+/**
+ * Function that creates a string of the given length, filled with question marks.
+ */
+char *createQuestionMarkString(int length) {
+    char *word = malloc(length);
+
+    for (int i = 0; i < length - 1; i++) {
+        word[i] = '?';
+    }
+
+    word[length - 1] = '\0';
+    return word;
 }
 
 /**
@@ -250,6 +300,113 @@ int configureConnectionSocket(sockaddr_in localAddress) {
     return connectionSocketDescriptor;
 }
 
+/**
+ * Function to initialise the Lua API.
+*/
+lua_State *initialiseLua() {
+    int executionState;
+    lua_State *L = lua_open(); // called L by convention
+    luaL_openlibs(L);
+    
+    executionState = luaL_dofile(L, "./dictionaries.lua");
+    if (executionState != LUA_OK) {
+        handleCriticalError("Failed to initialise the Lua API!", getTime());
+    }
+
+    return L;
+}
+
+/**
+ * This function will build the ecological and pollutant words dictionaries (not talking about the
+ * structural pattern here, but the first meaning of a dictionary). It will use the C Lua API,
+ * and the dictionaries will be stored in the Lua stack.
+ */
+void buildDictionaries(lua_State *L) {
+    lua_getglobal(L, "create_dictionaries"); // pushes the function to the top of the stack.
+
+    if (!lua_isfunction(L, LUA_STACK_TOP)) {
+        handleCriticalError("Failed to find 'create_dictionaries' global function!", getTime());
+    }
+
+    lua_pcall(L, 0, 0, 0);
+    // Now the two dictionaries in the script are in the Lua stack, full of words.
+}
+
+/**
+ * Tells whether the given word is considered pollutant or not.
+ * - `true` (1) if it is;
+ * - `false` (0) otherwise.
+ * 
+ * Note: the time complexity of this function in the worst case scenario is O(n), where n is the
+ * number of letters in the word to check, not the number of words in the dictionary!
+ */
+bool isWordPollutant(lua_State *L, char *word) {
+    lua_getglobal(L, "is_word_pollutant"); // pushes the function to the top of the stack.
+
+    if (!lua_isfunction(L, LUA_STACK_TOP)) {
+        handleRuntimeError("Failed to find 'is_word_pollutant' global function!", get_time());
+        return false;
+    }
+
+    // Pushing the parameter to the Lua API
+    lua_pushstring(L, word);
+    lua_pcall(L, 1, 1, 0);
+    return lua_toboolean(L, LUA_STACK_TOP); // Retrieving the returned value from the Lua stack
+}
+
+/**
+ * Tells whether the given word is considered ecological or not.
+ * - `true` (1) if it is;
+ * - `false` (0) otherwise.
+ * 
+ * Note: the time complexity of this function in the worst case scenario is O(n), where n is the
+ * number of letters in the word to check, not the number of words in the dictionary!
+ */
+bool isWordEcological(lua_State *L, char *word) {
+    lua_getglobal(L, "is_word_ecological"); // pushes the function to the top of the stack.
+
+    if (!lua_isfunction(L, LUA_STACK_TOP)) {
+        handleRuntimeError("Failed to find 'is_word_ecological' global function!", getTime());
+        return false;
+    }
+
+    // Pushing the parameter to the Lua API
+    lua_pushstring(L, word);
+    lua_pcall(L, 1, 1, 0);
+    return lua_toboolean(L, LUA_STACK_TOP); // Retrieving the returned value from the Lua stack.
+}
+
+/**
+ * Will replace every pollutant word by ecological words of the same length randomly.
+ */
+void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
+    for (int i = 0; i < count; i++) {
+        char *word;
+
+        if (strlen(pollutantWords[i]) < LUA_MIN_SWAP_LENGTH) {
+            // Word shorter than the shortest word in the ecological dictionary
+            word = createQuestionMarkString(strlen(pollutantWords[i]));
+        } else {
+            lua_getglobal(L, "swap_for_ecological_word"); // pushes the function to the top of the stack.
+
+            if (!lua_isfunction(L, LUA_STACK_TOP)) {
+                handleRuntimeError("Failed to find 'swap_for_ecological_word' global function!", getTime());
+                return;
+            }
+
+            // Pushing the parameter to the Lua API
+            lua_pushnumber(L, strlen(pollutantWords[i]));
+            lua_pcall(L, 1, 1, 0);
+            word = lua_tostring(L, LUA_STACK_TOP);
+        }
+
+        // Replacing the pollutant word's letters one by one.
+        for (int j = 0; j < strlen(word); j++) {
+            pollutantWords[i][j] = word[j];
+        }
+    }
+}
+
 #pragma endregion Server framework functions
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -271,11 +428,21 @@ void parseMessage(char *messageBuffer, char *messageContent, int *optionCode) {
  * identify pollutant or ecological words, and editing the content of the three last variables
  * accordingly.
 */
-void browseForPollutantsAndEcologicalWords(char **messageWords, 
+void browseForPollutantsAndEcologicalWords(lua_State *L, char **messageWords, 
         char **pollutantWords, int *pollutantWordsCount, int *ecologicalWordsCount) {
-    // TODO:
-    // - Create the lists of pollutant and ecological words.
-    // - Updating the right variable(s) on the fly.
+    *pollutantWordsCount = 0;
+    *ecologicalWordsCount = 0;
+
+    while (*messageWords != 0) {
+        if (isWordPollutant(L, *messageWords)) {
+            pollutantWords[*pollutantWordsCount] = *messageWords;
+            *pollutantWordsCount++;
+        } else if (isWordEcological(L, *messageWords)) {
+            *ecologicalWordsCount++;
+        }
+
+        ++messageWords;
+    }
 }
 
 /**
@@ -297,22 +464,22 @@ short computeMessageLengthEcoPenalty(int charCount) {
  * This function will compute the eco-value of a message. This value will then have to be added to
  * the current eco-value. It may be negative.
  */
-short computeMessageEcoValue(char *messageContent) {
+short computeMessageEcoValue(lua_State *L, char *messageContent) {
     char **messageWords;
     char **pollutantWords;
+    unsigned short wordCount;
     int deltaPollutantAndEcologicalWords;
     int pollutantWordsCount = 0;
     int ecologicalWordsCount = 0;
 
     debug("[INFO] %s: Computing eco-value for the message from '%s'", getTime(), "???");
 
-    // TODO:
-    // - Split the message in words (by ' ').
-    messageWords = malloc(0);
+    messageWords = split(messageContent, ' ', &wordCount);
 
 
-    pollutantWords = malloc(0); // TODO: replace 0 by the amount of words in the message
+    pollutantWords = malloc(sizeof(char *) * wordCount);
     browseForPollutantsAndEcologicalWords(
+        L,
         messageWords,
         pollutantWords,
         &pollutantWordsCount,
@@ -321,10 +488,9 @@ short computeMessageEcoValue(char *messageContent) {
     deltaPollutantAndEcologicalWords = ecologicalWordsCount - pollutantWordsCount;
 
     if ((-1) * deltaPollutantAndEcologicalWords > ECO_MAX_POLLUTANT_WORDS_TOLERATED) {
+        replacePollutantWords(L, pollutantWords, pollutantWordsCount);
         // TODO:
-        // - Replace all pollutant words (gathered within the pollutantWords array) for ecological
-        //   ones.
-        // - Return the opposite of the current eco-value (so that it becomes 0).
+        // - Return the opposite of the current eco-score (so that it becomes 0) => thread gesture
     }
 
     /* We want to cap the increase at the same value as we tolerate pollutant words. */
@@ -338,8 +504,7 @@ short computeMessageEcoValue(char *messageContent) {
  */
 void updateEcoScore(short ecoValue) {
     // TODO:
-    // - Check that 2+1, with 2 being unsigned and 2 being signed (both shorts) equals 3.
-    // - Change the eco-score value by adding the given eco-value to the stored eco-score.
+    // - Change the eco-score value by adding the given eco-value to the stored eco-score => thread gesture
 
     // call to getter may be removed later because we will have the value there.
     // +, not sure the default conversion from unsigned short to int is valid.
@@ -363,9 +528,9 @@ void deliverMessage(char *messageContent) {
 
     // TODO:
     // - Prepare a request for the client, containing the response (and potentially the name of the
-    //   sender).
+    //   sender) => needs documentation from client on how to send requests to them.
     // - Iterate through the list of subscribers for the current channel and send the message to
-    //   each of them.
+    //   each of them => thread gesture.
 
     debug("[INFO] %s: Message delivered to channel '%s'", getTime(), "???");
 }
@@ -376,7 +541,7 @@ void deliverMessage(char *messageContent) {
  * will automatically be created.
  */
 void subscribeTo(char *channelName) {
-    // TODO
+    // TODO => thread gesture.
 }
 
 /**
@@ -384,7 +549,7 @@ void subscribeTo(char *channelName) {
  * If the user is the only one subscribed to that specific channel, it will be deleted.
  */
 void unsubscribeFrom(char *channelName) {
-    // TODO
+    // TODO => thread gesture.
 }
 
 /**
@@ -393,9 +558,9 @@ void unsubscribeFrom(char *channelName) {
  * At the same time, it will compute the eco-value of the message and update the user's eco-score
  * accordingly.
 */
-void sendMessage(char *messageContent) {
+void sendMessage(lua_State *L, char *messageContent) {
     // updating the eco-score:
-    short messageEcoValue = computeMessageEcoValue(messageContent);
+    short messageEcoValue = computeMessageEcoValue(L, messageContent);
     updateEcoScore(messageEcoValue);
 
     // delivering the message to the subscribed clients
@@ -409,16 +574,16 @@ void sendMessage(char *messageContent) {
 void communicateEcoScore() {
     unsigned short ecoScore = getEcoScore();
 
-    // TODO:
-    // - Encapsulate the score into a response request
-    // - Send the newly built request back to the client
+    // TODO: => client requests documentation.
+    // - Encapsulate the score into a response request.
+    // - Send the newly built request back to the client.
 }
 
 /**
  * Dispatches the request to the right function according to the received option code.
  * If no option code matches, this function will display an error message.
  */
-void dispatchRequest(int optionCode, char *messageContent, char *messageBuffer, char *charTime) {
+void dispatchRequest(lua_State* L, int optionCode, char *messageContent, char *messageBuffer, char *charTime) {
     char *errorMessage;
 
     switch (optionCode) {
@@ -431,7 +596,7 @@ void dispatchRequest(int optionCode, char *messageContent, char *messageBuffer, 
             break;
 
         case OPTION_SEND_MESSAGE:
-            sendMessage(messageContent);
+            sendMessage(L, messageContent);
             break;
 
         case OPTION_GET_ECO_SCORE:
@@ -466,7 +631,7 @@ void dispatchRequest(int optionCode, char *messageContent, char *messageBuffer, 
  * To detect what option is requested, the function will read the 24 first characters of the buffer.
  * These should contain the option code (`01`) for subscription and (`00`) for sending a message.
  */
-void handleRequest(int socket) {
+void handleRequest(lua_State *L, int socket) {
     char messageBuffer[MAX_MESSAGE_LENGTH] = {0};
     int messageLength;
     char *messageContent;
@@ -481,7 +646,7 @@ void handleRequest(int socket) {
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
     parseMessage(messageBuffer, messageContent, &optionCode);
-    dispatchRequest(optionCode, messageContent, messageBuffer, getTime());
+    dispatchRequest(L, optionCode, messageContent, messageBuffer, getTime());
     free(messageContent);
 }
 
@@ -492,12 +657,15 @@ int main(int argc, char **argv) {
     sockaddr_in localAddress;
     sockaddr_in currentClientAddress;
     hostent *hostPointer;
+    lua_State *L; // called L by convention
     
 
     /* Setting up the server*/
     hostPointer = retrieveHost();
     localAddress = configureLocalAddress(hostPointer, PORT_NUMBER);
     connectionSocketDescriptor = configureConnectionSocket(localAddress);
+    L = initialiseLua();
+    buildDictionaries(L);
 
 
     /* Handling requests */
@@ -518,7 +686,7 @@ int main(int argc, char **argv) {
         }
 
         debug("[INFO] %s: Request being received... %s\n", getTime(), "");
-        handleRequest(transmissionSocketDescriptor);
+        handleRequest(L, transmissionSocketDescriptor);
         close(transmissionSocketDescriptor);
         flushOutput();
     }

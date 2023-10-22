@@ -1,0 +1,110 @@
+Sources d'énergie :
+    électricité
+    renouvelable
+    solaire
+    hydroélectrique
+    éolienne
+    géothermique
+    nucléaire
+
+Véhicules et moyens de transport :
+    accon
+    barque
+    bicyclette
+    bus
+        autobus
+        omnibus
+    calèche
+    canoë
+    canot
+    car
+        autocar
+    carrosse
+    catamaran
+        trimaran
+    chameau
+    charrette
+    cheval
+    covoiturage
+    diligence
+    dromadaire
+    échasses
+    éléphant
+    equif
+    fiacre
+    funiculaire
+    frêt
+    galère
+    goélette
+    gondole
+    gyropode
+    hoverboard
+        overboard
+    jonque
+    kayak
+    limonière
+    luge
+    métro
+    montgolfière
+    parachute
+    pédalo
+    pirogue
+    planeur
+        aéroplane
+        deltaplane
+    pousse-pousse
+    roller
+    segway
+    skate
+        skateboard
+    ski
+    snowboard
+    sulky
+    tandem
+    téléphérique
+        télésiège
+
+    train
+        aérotrain
+        tramway
+    tricycle
+    trotinette
+    triporteur
+    tyrolienne
+    voile
+        planche-à-voile
+        voilier
+    vélo
+    yole
+
+Matériaux et composants chimiques :
+    verre
+    carton
+    bois
+    bambou
+    fumier
+    engrais
+    liège
+    pac
+
+Concepts et systèmes :
+    durable
+    recyclage
+    local
+    artisanat
+    modération
+    led
+    del
+    pair
+    marché
+    lettre
+    atelier
+    chasse
+    reforestation
+
+Services et entreprises :
+    ecosia
+
+Autre :
+    forêt
+    arbres

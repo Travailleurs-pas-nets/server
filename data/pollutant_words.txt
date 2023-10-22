@@ -1,0 +1,103 @@
+Sources d'énergie :
+    charbon
+    pétrole
+    gaz
+    gasoil
+    gazole
+    essence
+    fossile
+    vapeur
+
+Véhicules et moyens de transport :
+    aérostat
+    aéronef
+    aéroglisseur
+    aérobus
+    automobile
+    avion
+        hydravion
+    bateau
+    camion
+        camionnette
+    char
+    cyclomoteur
+    dirigeable
+    fusée
+    hélicoptère
+    jet
+    limousine
+    locomobile
+        locomotrice
+        locotracteur
+    ludospace
+    moto
+        motoneige
+    paquebot
+    péniche
+    pétrolier
+    quad
+        quadricycle
+        quadrimoteur
+        quadriréacteur
+    scooter
+    side-car
+    sous-marin
+    tank
+    téléportation
+    tracteur
+    ulm
+    voiture
+    yacht
+    zeppelin
+
+Matériaux et composants chimiques :
+    plomb
+    chrome
+    mercure
+    glyphosate
+    pesticide
+    plastique
+    polystyrène
+    bitume
+    asphalte
+    goudron
+    solvant
+    encre
+    cuir
+    béton
+    caoutchouc
+    carbone
+
+Concepts et systèmes :
+    chauffage
+    importation
+    industrie
+    consommation
+    jetable
+    minage
+    hallogène
+    climatisation
+    serveur
+    livraison
+    mail
+    message
+    usine
+    pêche
+    acheter
+    déforestation
+
+Services et entreprises :
+    cryptomonnaie
+    bitcoin
+    google
+    amazon
+    facebook
+    apple
+    microsoft
+    ali
+    wish
+    cdiscount
+
+Autre :
+    feu
+    humain
