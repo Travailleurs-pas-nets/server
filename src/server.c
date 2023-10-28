@@ -26,6 +26,7 @@
 #define LUA_MIN_SWAP_LENGTH 3
 #define MAX_NAME_LENGTH 256
 #define MAX_MESSAGE_LENGTH 1024
+#define MAX_CHANNEL_COUNT 5
 #define PORT_NUMBER 5000
 #define REQUEST_QUEUE_SIZE 5
 #define DEBUG 1
@@ -36,6 +37,13 @@
 #define OPTION_UNSUBSCRIBE 1
 #define OPTION_SEND_MESSAGE 2
 #define OPTION_GET_ECO_SCORE 3
+
+/** Defining client option codes */
+#define CLI_SUBSCRIBED 0
+#define CLI_UNSUBSCRIBED 1
+#define CLI_DISTRIBUTE_MESSAGE 2
+#define CLI_SEND_ECO_SCORE 3
+#define CLI_DISTRIBUTE_REMINDER 4
 
 /** Defining eco-score computation constants */
 #define ECO_MAX_POLLUTANT_WORDS_TOLERATED 15
@@ -49,6 +57,20 @@ typedef struct sockaddr sockaddr;
 typedef struct sockaddr_in sockaddr_in;
 typedef struct hostent hostent;
 typedef struct servent servent;
+typedef struct channel channel;
+
+struct channel {
+    /** The name of the channel */
+    char *name;
+    /** The array of subscribers, (containing their transfer socket identifiers). */
+    int *subscribers;
+    /** The count of subscribers to the channel. */
+    unsigned short subscribersCount;
+};
+
+/** Creating global variables */
+channel channels[MAX_CHANNEL_COUNT];
+int channelsCount = 0;
 
 #pragma endregion Programme initialisation
 
@@ -130,36 +152,47 @@ char *concat(unsigned short argCount, ...) {
     return concatenated;
 }
 
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-value"
 /**
  * Function that splits a string into an array of strings, using the given delimiter.
+ * 
+ * The pragmas are because we use values pointed to, which will trigger a warning at compile time,
+ * saying a computed value is not used, while it actually is.
  */
 char **split(char *stringToSplit, char delimiter, unsigned short *wordCount) {
     char *token;
     char **tokens;
+    char delimiterAsString[1] = { delimiter };
     unsigned short delimiterCount = 0;
-    *wordCount = 0;
+    unsigned short localWordCount = 0;
+    char *stringDuplicate = strdup(stringToSplit); // Copying the string to ensure it stays unchanged.
 
     // First, we iterate through the string to find the number of times the delimiter is present.
-    for (int i = 0; stringToSplit[i] != '\0'; i++) {
-        if (stringToSplit[i] == delimiter) {
+    for (int i = 0; stringDuplicate[i] != '\0'; i++) {
+        if (stringDuplicate[i] == delimiter) {
             delimiterCount++;
         }
     }
 
     // Then we create an array of a capacity of 1 more than the delimiter count (because there is
     // one more element than there are delimiters).
-    tokens = malloc(sizeof(char *) * (delimiterCount + 1));
+    tokens = malloc(sizeof(char *) * (delimiterCount + 2));
 
     // And finally we fill our array with strings.
-    token = strtok(stringToSplit, delimiter);
+    token = strtok(stringDuplicate, delimiterAsString);
     while (token) {
-        tokens[*wordCount] = token;
-        *wordCount++;
-        token = strtok(NULL, delimiter);
+        tokens[localWordCount] = token;
+        localWordCount++;
+        token = strtok(NULL, delimiterAsString);
     }
     
+    *wordCount = localWordCount;
+    tokens[localWordCount + 1] = 0;
     return tokens;
 }
+#pragma GCC diagnostic pop
 
 /**
  * Function that creates a string of the given length, filled with question marks.
@@ -182,6 +215,34 @@ void flushOutput() {
     if (DEBUG == 1) {
         printf("\n");
     }
+}
+
+/**
+ * Function that creates a request's option code from its unsigned short representation.
+ */
+char *assembleOptionCode(unsigned short optionCode) {
+    char *codeValue;
+    char *optionCodeString = malloc(sizeof(char) * (OPTION_CODE_LENGTH + 1));
+
+    codeValue = intToChars(optionCode);
+    optionCodeString[0] = '0';
+    for (int i = 1; i <= strlen(codeValue); i++) {
+        optionCodeString[i] = codeValue[i - 1];
+    }
+    for (int i = strlen(codeValue) + 1; i < OPTION_CODE_LENGTH; i++) {
+        optionCodeString[i] = ' ';
+    }
+
+    optionCodeString[OPTION_CODE_LENGTH] = '\0';
+    return optionCodeString;
+}
+
+/**
+ * Function that creates a request content from its code and message.
+ */
+char *assembleRequestContent(unsigned short optionCode, char *content) {
+    char *optionCodeString = assembleOptionCode(optionCode);
+    return concat(2, optionCodeString, content);
 }
 
 /**
@@ -305,10 +366,10 @@ int configureConnectionSocket(sockaddr_in localAddress) {
 */
 lua_State *initialiseLua() {
     int executionState;
-    lua_State *L = lua_open(); // called L by convention
+    lua_State *L = luaL_newstate(); // called L by convention
     luaL_openlibs(L);
     
-    executionState = luaL_dofile(L, "./dictionaries.lua");
+    executionState = luaL_dofile(L, "./bin/scripts/dictionaries.lua");
     if (executionState != LUA_OK) {
         handleCriticalError("Failed to initialise the Lua API!", getTime());
     }
@@ -344,7 +405,7 @@ bool isWordPollutant(lua_State *L, char *word) {
     lua_getglobal(L, "is_word_pollutant"); // pushes the function to the top of the stack.
 
     if (!lua_isfunction(L, LUA_STACK_TOP)) {
-        handleRuntimeError("Failed to find 'is_word_pollutant' global function!", get_time());
+        handleRuntimeError("Failed to find 'is_word_pollutant' global function!", getTime());
         return false;
     }
 
@@ -381,7 +442,7 @@ bool isWordEcological(lua_State *L, char *word) {
  */
 void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
     for (int i = 0; i < count; i++) {
-        char *word;
+        const char *word;
 
         if (strlen(pollutantWords[i]) < LUA_MIN_SWAP_LENGTH) {
             // Word shorter than the shortest word in the ecological dictionary
@@ -417,12 +478,17 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
 /**
  * This function will separate the option code from the message content.
  */
-void parseMessage(char *messageBuffer, char *messageContent, int *optionCode) {
-    messageContent = strdup(messageBuffer + OPTION_CODE_LENGTH + 1);
-    messageBuffer[OPTION_CODE_LENGTH + 1] = '\0';
+char *parseMessage(char *messageBuffer, int *optionCode) {
+    char *messageContent = strdup(messageBuffer + OPTION_CODE_LENGTH);
+
+    messageBuffer[OPTION_CODE_LENGTH] = '\0';
     sscanf(messageBuffer, "%d", optionCode);
+
+    return messageContent;
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-value"
 /**
  * Function that will iterate through the words within the message from the client, trying to
  * identify pollutant or ecological words, and editing the content of the three last variables
@@ -430,20 +496,24 @@ void parseMessage(char *messageBuffer, char *messageContent, int *optionCode) {
 */
 void browseForPollutantsAndEcologicalWords(lua_State *L, char **messageWords, 
         char **pollutantWords, int *pollutantWordsCount, int *ecologicalWordsCount) {
-    *pollutantWordsCount = 0;
-    *ecologicalWordsCount = 0;
+    int localPollutantWordsCount = 0;
+    int localEcologicalWordsCount = 0;
 
     while (*messageWords != 0) {
         if (isWordPollutant(L, *messageWords)) {
-            pollutantWords[*pollutantWordsCount] = *messageWords;
-            *pollutantWordsCount++;
+            pollutantWords[localPollutantWordsCount] = *messageWords;
+            localPollutantWordsCount++;
         } else if (isWordEcological(L, *messageWords)) {
-            *ecologicalWordsCount++;
+            localEcologicalWordsCount++;
         }
 
         ++messageWords;
     }
+
+    *pollutantWordsCount = localPollutantWordsCount;
+    *ecologicalWordsCount = localEcologicalWordsCount;
 }
+#pragma GCC diagnostic pop
 
 /**
  * Function that computes the eco-penalty depending on the message length
@@ -472,7 +542,7 @@ short computeMessageEcoValue(lua_State *L, char *messageContent) {
     int pollutantWordsCount = 0;
     int ecologicalWordsCount = 0;
 
-    debug("[INFO] %s: Computing eco-value for the message from '%s'", getTime(), "???");
+    debug("[INFO] %s: Computing eco-value for the message from '%s'\n", getTime(), "???");
 
     messageWords = split(messageContent, ' ', &wordCount);
 
@@ -500,6 +570,15 @@ short computeMessageEcoValue(lua_State *L, char *messageContent) {
 }
 
 /**
+ * Retrieves the eco-score for the current user in the current channel.
+ */
+unsigned short getEcoScore() {
+    // TODO:
+    // - Store the eco-score somewhere it is possible to retrieve during a request.
+    return 0;
+}
+
+/**
  * This function will add the given eco-value to the current eco-score.
  */
 void updateEcoScore(short ecoValue) {
@@ -508,15 +587,7 @@ void updateEcoScore(short ecoValue) {
 
     // call to getter may be removed later because we will have the value there.
     // +, not sure the default conversion from unsigned short to int is valid.
-    debug("[INFO] %s: New eco-score = %s", getTime(), intToChars(getEcoScore()));
-}
-
-/**
- * Retrieves the eco-score for the current user in the current channel.
- */
-unsigned short getEcoScore() {
-    // TODO:
-    // - Store the eco-score somewhere it is possible to retrieve during a request.
+    debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore()));
 }
 
 /**
@@ -524,15 +595,17 @@ unsigned short getEcoScore() {
  * to all of them.
 */
 void deliverMessage(char *messageContent) {
-    debug("[INFO] %s: delivering the message '%s'", getTime(), messageContent);
+    char *messageBuffer;
+
+    debug("[INFO] %s: delivering the message '%s'\n", getTime(), messageContent);
+
+    messageBuffer = assembleRequestContent(CLI_DISTRIBUTE_MESSAGE, messageContent);
 
     // TODO:
-    // - Prepare a request for the client, containing the response (and potentially the name of the
-    //   sender) => needs documentation from client on how to send requests to them.
     // - Iterate through the list of subscribers for the current channel and send the message to
     //   each of them => thread gesture.
 
-    debug("[INFO] %s: Message delivered to channel '%s'", getTime(), "???");
+    debug("[INFO] %s: Message delivered to channel '%s'\n", getTime(), "???");
 }
 
 /**
@@ -540,7 +613,8 @@ void deliverMessage(char *messageContent) {
  * If there is no corresponding channel, and still room in the allocated array for channels, it
  * will automatically be created.
  */
-void subscribeTo(char *channelName) {
+void subscribeTo(int socket, char *channelName) {
+    debug("[INFO] %s: Request dispatched to the subscription service%s\n", getTime(), "");
     // TODO => thread gesture.
 }
 
@@ -548,7 +622,8 @@ void subscribeTo(char *channelName) {
  * This function will unsubscribe the current user from the given channel (identified via its name).
  * If the user is the only one subscribed to that specific channel, it will be deleted.
  */
-void unsubscribeFrom(char *channelName) {
+void unsubscribeFrom(int socket, char *channelName) {
+    debug("[INFO] %s: Request dispatched to the unsubscription service%s\n", getTime(), "");
     // TODO => thread gesture.
 }
 
@@ -558,7 +633,8 @@ void unsubscribeFrom(char *channelName) {
  * At the same time, it will compute the eco-value of the message and update the user's eco-score
  * accordingly.
 */
-void sendMessage(lua_State *L, char *messageContent) {
+void sendMessage(lua_State *L, int socket, char *messageContent) {
+    debug("[INFO] %s: Request dispatched to the message delivering service%s\n", getTime(), "");
     // updating the eco-score:
     short messageEcoValue = computeMessageEcoValue(L, messageContent);
     updateEcoScore(messageEcoValue);
@@ -571,36 +647,36 @@ void sendMessage(lua_State *L, char *messageContent) {
  * Function that gets the eco-score for the current client, and formats it into a request before to
  * send the result back to the client.
  */
-void communicateEcoScore() {
+void communicateEcoScore(int socket) {
+    debug("[INFO] %s: Request dispatched to the eco-score command service%s\n", getTime(), "");
     unsigned short ecoScore = getEcoScore();
-
-    // TODO: => client requests documentation.
-    // - Encapsulate the score into a response request.
-    // - Send the newly built request back to the client.
+    char *requestBuffer = assembleRequestContent(CLI_SEND_ECO_SCORE, intToChars(ecoScore));
+    
+    write(socket, requestBuffer, strlen(requestBuffer)+1);
 }
 
 /**
  * Dispatches the request to the right function according to the received option code.
  * If no option code matches, this function will display an error message.
  */
-void dispatchRequest(lua_State* L, int optionCode, char *messageContent, char *messageBuffer, char *charTime) {
+void dispatchRequest(lua_State* L, int socket, int optionCode, char *messageContent, char *messageBuffer, char *charTime) {
     char *errorMessage;
 
     switch (optionCode) {
         case OPTION_SUBSCRIBE:
-            subscribeTo(messageContent);
+            subscribeTo(socket, messageContent);
             break;
 
         case OPTION_UNSUBSCRIBE:
-            unsubscribeFrom(messageContent);
+            unsubscribeFrom(socket, messageContent);
             break;
 
         case OPTION_SEND_MESSAGE:
-            sendMessage(L, messageContent);
+            sendMessage(L, socket, messageContent);
             break;
 
         case OPTION_GET_ECO_SCORE:
-            communicateEcoScore();
+            communicateEcoScore(socket);
             break;
 
         default:
@@ -645,8 +721,8 @@ void handleRequest(lua_State *L, int socket) {
     debug("[INFO] %s: Message received => '%s'\n", getTime(), messageBuffer);
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
-    parseMessage(messageBuffer, messageContent, &optionCode);
-    dispatchRequest(L, optionCode, messageContent, messageBuffer, getTime());
+    messageContent = parseMessage(messageBuffer, &optionCode);
+    dispatchRequest(L, socket, optionCode, messageContent, messageBuffer, getTime());
     free(messageContent);
 }
 
@@ -670,7 +746,7 @@ int main(int argc, char **argv) {
 
     /* Handling requests */
     listen(connectionSocketDescriptor, REQUEST_QUEUE_SIZE);
-    debug("[INFO] %s: Server started listening on port %s\n", getTime(), intToChars(PORT_NUMBER));
+    debug("[INFO] %s: Server started listening on port %s\n\n", getTime(), intToChars(PORT_NUMBER));
 
     for (;;) {
         currentAddressLength = sizeof(currentClientAddress);

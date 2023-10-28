@@ -1,5 +1,4 @@
 -- INI
-local json = require 'lunajson'
 pollutant_dictionary = {}
 ecological_dictionary = {}
 pollutant_list_by_length = {}
@@ -52,10 +51,10 @@ local function verify_word(dictionary, word)
 end
 
 function create_dictionaries()
-    io.input("../data/pollutant_words_list.txt")
+    io.input("data/pollutant_words_list.txt")
     build_dictionary_and_list(pollutant_dictionary, pollutant_list_by_length)
 
-    io.input("../data/ecological_words_list.txt")
+    io.input("data/ecological_words_list.txt")
     build_dictionary_and_list(ecological_dictionary, ecological_list_by_length)
 end
 
@@ -89,3 +88,6 @@ function swap_for_ecological_word(word_length)
 
     return word
 end
+
+-- PGM
+create_dictionaries()
