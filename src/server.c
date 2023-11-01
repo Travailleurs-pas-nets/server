@@ -27,6 +27,7 @@
 #define MAX_NAME_LENGTH 256
 #define MAX_MESSAGE_LENGTH 1024
 #define MAX_CHANNEL_COUNT 5
+#define MAX_CHANNEL_SUBSCRIBERS_COUNT 10
 #define PORT_NUMBER 5000
 #define REQUEST_QUEUE_SIZE 5
 #define DEBUG 1
@@ -63,13 +64,13 @@ struct channel {
     /** The name of the channel */
     char *name;
     /** The array of subscribers, (containing their transfer socket identifiers). */
-    int *subscribers;
+    int **subscribers;
     /** The count of subscribers to the channel. */
     unsigned short subscribersCount;
 };
 
 /** Creating global variables */
-channel channels[MAX_CHANNEL_COUNT];
+channel *channels[MAX_CHANNEL_COUNT] = {0};
 int channelsCount = 0;
 
 #pragma endregion Programme initialisation
@@ -318,7 +319,7 @@ hostent *retrieveHost() {
     host = gethostbyname(hostName);
 
     if (host == NULL) {
-        char *errorMessage = concat(3, "Server not found ('", hostName, "')");
+        char *errorMessage = concat(3, "Server not found ('", hostName, "')\n");
         handleCriticalError(errorMessage, getTime());
     }
 
@@ -331,7 +332,7 @@ hostent *retrieveHost() {
 sockaddr_in configureLocalAddress(hostent *host, unsigned short port) {
     sockaddr_in localAddress;
 
-    bcopy((char *)host->h_addr, (char *)&localAddress.sin_addr, host->h_length);
+    bcopy((char *)host->h_addr_list[0], (char *)&localAddress.sin_addr, host->h_length);
     localAddress.sin_family = host->h_addrtype;
     localAddress.sin_addr.s_addr = INADDR_ANY;
 
@@ -340,13 +341,17 @@ sockaddr_in configureLocalAddress(hostent *host, unsigned short port) {
     return localAddress;
 }
 
+/**
+ * This function configures the server's connection socket. It creates an IPv4 TCP socket, and
+ * binds it, before to return the socket descriptor.
+ */
 int configureConnectionSocket(sockaddr_in localAddress) {
     int connectionSocketDescriptor;
     int operationResultCode;
 
     connectionSocketDescriptor = socket(AF_INET, SOCK_STREAM, 0);
     if (connectionSocketDescriptor < 0) {
-        handleCriticalError("Failed to create the connection socket", getTime());
+        handleCriticalError("Failed to create the connection socket\n", getTime());
     }
 
     operationResultCode = bind(
@@ -355,7 +360,7 @@ int configureConnectionSocket(sockaddr_in localAddress) {
         sizeof(localAddress)
     );
     if (operationResultCode < 0) {
-        handleCriticalError("Failed to bind the socket to the connection address", getTime());
+        handleCriticalError("Failed to bind the socket to the connection address\n", getTime());
     }
 
     return connectionSocketDescriptor;
@@ -371,7 +376,7 @@ lua_State *initialiseLua() {
     
     executionState = luaL_dofile(L, "./bin/scripts/dictionaries.lua");
     if (executionState != LUA_OK) {
-        handleCriticalError("Failed to initialise the Lua API!", getTime());
+        handleCriticalError("Failed to initialise the Lua API!\n", getTime());
     }
 
     return L;
@@ -386,7 +391,7 @@ void buildDictionaries(lua_State *L) {
     lua_getglobal(L, "create_dictionaries"); // pushes the function to the top of the stack.
 
     if (!lua_isfunction(L, LUA_STACK_TOP)) {
-        handleCriticalError("Failed to find 'create_dictionaries' global function!", getTime());
+        handleCriticalError("Failed to find 'create_dictionaries' global function!\n", getTime());
     }
 
     lua_pcall(L, 0, 0, 0);
@@ -405,7 +410,7 @@ bool isWordPollutant(lua_State *L, char *word) {
     lua_getglobal(L, "is_word_pollutant"); // pushes the function to the top of the stack.
 
     if (!lua_isfunction(L, LUA_STACK_TOP)) {
-        handleRuntimeError("Failed to find 'is_word_pollutant' global function!", getTime());
+        handleRuntimeError("Failed to find 'is_word_pollutant' global function!\n", getTime());
         return false;
     }
 
@@ -427,7 +432,7 @@ bool isWordEcological(lua_State *L, char *word) {
     lua_getglobal(L, "is_word_ecological"); // pushes the function to the top of the stack.
 
     if (!lua_isfunction(L, LUA_STACK_TOP)) {
-        handleRuntimeError("Failed to find 'is_word_ecological' global function!", getTime());
+        handleRuntimeError("Failed to find 'is_word_ecological' global function!\n", getTime());
         return false;
     }
 
@@ -451,7 +456,7 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
             lua_getglobal(L, "swap_for_ecological_word"); // pushes the function to the top of the stack.
 
             if (!lua_isfunction(L, LUA_STACK_TOP)) {
-                handleRuntimeError("Failed to find 'swap_for_ecological_word' global function!", getTime());
+                handleRuntimeError("Failed to find 'swap_for_ecological_word' global function!\n", getTime());
                 return;
             }
 
@@ -466,6 +471,203 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
             pollutantWords[i][j] = word[j];
         }
     }
+}
+
+/**
+ * This function allocates memory for the subscribers array contained in the channel structure, and
+ * initialises each space to a NULL value, which will later be meaning that the place is free.
+ */
+void initialiseChannelSubscribers(channel *chanl) {
+    chanl->subscribers = malloc(MAX_CHANNEL_SUBSCRIBERS_COUNT * sizeof(int *));
+
+    for(int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
+        chanl->subscribers[i] = NULL;
+    }
+}
+
+/**
+ * Function that searches through the list of channels already on the server for a channel with the
+ * given name.
+ * If no matching channel is found, a NULL pointer is returned.
+ */
+channel *findChannelByName(const char *channelName) {
+    channel *chanl = NULL;
+
+    for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
+        if (strcmp(channels[i]->name, channelName) == 0) {
+            chanl = channels[i];
+        }
+    }
+
+    return chanl;
+}
+
+/**
+ * Creates a channel with the given channel name.
+ * This function will fail if the amount of channel on the server is already equal to the maximum
+ * amount defined by a constant.
+ * In that case, the returned value will be a NULL pointer.
+ */
+channel *createChannel(char *channelName) {
+    channel *chanl;
+    bool isInserted = false;
+
+    if (channelsCount >= MAX_CHANNEL_COUNT) {
+        return NULL;
+    }
+
+    // Creating the channel.
+    chanl = malloc(sizeof(channel));
+    chanl->name = channelName;
+    chanl->subscribersCount = 0;
+    initialiseChannelSubscribers(chanl);
+
+    // Now that the instance is created, we try to add it to the array.
+    for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
+        if (channels[i] == 0) {
+            channels[i] = chanl;
+            isInserted = true;
+            break;
+        }
+    }
+
+    if (!isInserted) {
+        channelsCount = MAX_CHANNEL_COUNT;
+        handleRuntimeError("Channel array unexpectedly full. => Count corrected.\n", getTime());
+        free(chanl->subscribers);
+        free(chanl);
+        return NULL;
+    }
+
+    channelsCount++;
+    return chanl;
+}
+
+/**
+ * Deletes the given channel.
+ * This function will fail if the given pointer is `NULL`. It may also display an error message if
+ * the channel given to be deleted was not in the channels list. In that case, the channel will
+ * still be deleted anyway, so please do not use it afterwards.
+*/
+void deleteChannel(channel *chanl) {
+    bool isDeleted = false;
+
+    if (chanl == NULL) {
+        handleRuntimeError("Failed to delete a channel. => NULL pointer given.\n", getTime());
+        return;
+    }
+
+    // Removing the channel from the list
+    for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
+        if (channels[i] == chanl) { // Effectively looking for a reference
+            channels[i] = NULL; // Removing the pointer to the given channel from the channel pointers list
+            isDeleted = true;
+            break;
+        }
+    }
+
+    if (!isDeleted) {
+        handleRuntimeError("Channel not found within the array. => memory freed anyway.\n", getTime());
+    }
+
+    // Freeing the memory
+    free(chanl->subscribers);
+    free(chanl);
+}
+
+/**
+ * Function that will look for a channel with the given name, or create a new channel if it isn't
+ * found.
+ * If it isn't found, and it isn't possible to create a new one, this function will return a NULL
+ * pointer.
+ */
+channel *findOrCreateChannel(char *channelName) {
+    channel *chanl = findChannelByName(channelName);
+    if (chanl == NULL) {
+        chanl = createChannel(channelName);
+    }
+
+    return chanl;
+}
+
+/**
+ * This function will try to add a user (identified via its transfer socket descriptor) to the list
+ * of subscribers of the given channel.
+ * It may fail if the amount of users subscribed to the channel is equal to the maximum amount
+ * allowed. In that case it will return false.
+ */
+bool subscribeUser(int socket, channel *chanl) {
+    bool isInserted = false;
+
+    if (chanl->subscribersCount >= MAX_CHANNEL_SUBSCRIBERS_COUNT) {
+        return false;
+    }
+
+    for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
+        if (chanl->subscribers[i] == NULL) {
+            chanl->subscribers[i] = &socket;
+            isInserted = true;
+            break;
+        }
+    }
+
+    if (!isInserted) {
+        chanl->subscribersCount = MAX_CHANNEL_SUBSCRIBERS_COUNT;
+        handleRuntimeError("Channel subscribers array unexpectedly full. => Count corrected.\n", getTime());
+        return false;
+    }
+
+    chanl->subscribersCount++;
+    return true;
+}
+
+/**
+ * This function will try to remove a user (identified via its transfer socket descriptor) from the
+ * list of subscribers of the given channel.
+ * It may fail if there is no user subscribed to the channel, or if the user that wants to
+ * unsubscribe isn't actually subscribed to the channel.
+*/
+bool unsubscribeUser(int socket, channel *chanl) {
+    bool isUnsubscribed = false;
+
+    if (chanl->subscribersCount <= 0) {
+        return false;
+    }
+
+    for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
+        if (chanl->subscribers[i] == &socket) {
+            chanl->subscribers[i] = NULL;
+            chanl->subscribersCount--;
+            isUnsubscribed = true;
+            break;
+        }
+    }
+
+    if (chanl->subscribersCount == 0) {
+        deleteChannel(chanl);
+    }
+
+    return isUnsubscribed;
+}
+
+/**
+ * This function has to be called only if the subscription of a user to a channel succeeded. It
+ * sends a message to the client of the subscriber stating the subscription succeeded.
+ */
+void notifySubscriptionSuccess(int socket) {
+    char *requestBuffer = assembleRequestContent(CLI_SUBSCRIBED, "0");
+
+    write(socket, requestBuffer, strlen(requestBuffer) + 1);
+}
+
+/**
+ * This function has to be called only if the subscription cancellation of a user to a channel
+ * succeeded. It sends a message to the client stating the subscription was cancelled.
+ */
+void notifyUnsubscriptionSuccess(int socket) {
+    char *requestBuffer = assembleRequestContent(CLI_UNSUBSCRIBED, "0");
+
+    write(socket, requestBuffer, strlen(requestBuffer) + 1);
 }
 
 #pragma endregion Server framework functions
@@ -614,8 +816,29 @@ void deliverMessage(char *messageContent) {
  * will automatically be created.
  */
 void subscribeTo(int socket, char *channelName) {
+    bool success;
+    channel *chanl;
+
     debug("[INFO] %s: Request dispatched to the subscription service%s\n", getTime(), "");
-    // TODO => thread gesture.
+
+    chanl = findOrCreateChannel(channelName);
+    if (chanl == NULL) {
+        // Impossible to get or create the desired channel.
+        debug("[INFO] %s: Impossible to get or create the channel '%s'\n", getTime(), channelName);
+        return;
+    }
+
+    success = subscribeUser(socket, chanl);
+
+    if (!success) {
+        debug("[INFO] %s: Impossible to add the user to the channel '%s'\n", getTime(), channelName);
+        return;
+    }
+
+    // TODO:
+    // - Add a pointer to the channel the user connected itself to, to its transfer thread => thread gesture
+    debug("[INFO] %s: User successfully connected to the channel '%s'\n", getTime(), channelName);
+    notifySubscriptionSuccess(socket);
 }
 
 /**
@@ -623,8 +846,29 @@ void subscribeTo(int socket, char *channelName) {
  * If the user is the only one subscribed to that specific channel, it will be deleted.
  */
 void unsubscribeFrom(int socket, char *channelName) {
+    bool success;
+    channel *chanl;
+
     debug("[INFO] %s: Request dispatched to the unsubscription service%s\n", getTime(), "");
-    // TODO => thread gesture.
+    
+    chanl = findChannelByName(channelName);
+    if (chanl == NULL) {
+        handleRuntimeError("No matching channel", getTime());
+        return;
+    }
+
+    success = unsubscribeUser(socket, chanl);
+
+    if (!success) {
+        debug("[INFO] %s: Impossible to remove the user from the channel '%s'\n", getTime(), channelName);
+        return;
+    }
+
+    // TODO:
+    // - Set the pointer to the channel the user disconnected itself from, in its transfer thread
+    //   to NULL => thread gesture
+    debug("[INFO] %s: User successfully disconnected from the channel '%s'\n", getTime(), channelName);
+    notifyUnsubscriptionSuccess(socket);
 }
 
 /**
@@ -652,7 +896,7 @@ void communicateEcoScore(int socket) {
     unsigned short ecoScore = getEcoScore();
     char *requestBuffer = assembleRequestContent(CLI_SEND_ECO_SCORE, intToChars(ecoScore));
     
-    write(socket, requestBuffer, strlen(requestBuffer)+1);
+    write(socket, requestBuffer, strlen(requestBuffer) + 1);
 }
 
 /**
@@ -681,7 +925,7 @@ void dispatchRequest(lua_State* L, int socket, int optionCode, char *messageCont
 
         default:
             /* Invalid code => displaying the error */
-            errorMessage = concat(3, "Invalid option code ('", messageBuffer, "')");
+            errorMessage = concat(3, "Invalid option code ('", messageBuffer, "')\n");
 
             handleRuntimeError(errorMessage, charTime);
             free(errorMessage);
