@@ -22,12 +22,14 @@
 #include <lua.h>            /* Lua lib, allowing to incorporate Lua code to C programs */
 #include <lauxlib.h>
 #include <lualib.h>
+#include <pthread.h>        /* For threads */
 #define LUA_STACK_TOP -1
 #define LUA_MIN_SWAP_LENGTH 3
-#define MAX_NAME_LENGTH 256
+#define MAX_HOST_NAME_LENGTH 256
 #define MAX_MESSAGE_LENGTH 1024
 #define MAX_CHANNEL_COUNT 5
 #define MAX_CHANNEL_SUBSCRIBERS_COUNT 10
+#define MAX_THREAD_INACTIVITY_TIME 3000 // 5 minutes
 #define PORT_NUMBER 5000
 #define REQUEST_QUEUE_SIZE 5
 #define DEBUG 1
@@ -47,6 +49,9 @@
 #define CLI_DISTRIBUTE_REMINDER 4
 
 /** Defining eco-score computation constants */
+#define ECO_MIN 0
+#define ECO_MAX 100
+#define ECO_BASE 50
 #define ECO_MAX_POLLUTANT_WORDS_TOLERATED 15
 #define ECO_LENGTH_PENALTY_0_BOUNDARY 150 // chars
 #define ECO_LENGTH_PENALTY_1_BOUNDARY 250 // chars
@@ -58,15 +63,34 @@ typedef struct sockaddr sockaddr;
 typedef struct sockaddr_in sockaddr_in;
 typedef struct hostent hostent;
 typedef struct servent servent;
+typedef struct subscriber subscriber;
 typedef struct channel channel;
+typedef struct request request;
+
+struct subscriber {
+    /** 
+     * The transfer socket of the user. This is useful because even though the user thread may be
+     * terminated, the socket will not necessarily be closed.
+     */
+    int *transferSocket;
+    /** The user's eco-score. */
+    int ecoScore;
+};
 
 struct channel {
-    /** The name of the channel */
+    /** The name of the channel. */
     char *name;
     /** The array of subscribers, (containing their transfer socket identifiers). */
-    int **subscribers;
+    subscriber **subscribers;
     /** The count of subscribers to the channel. */
     unsigned short subscribersCount;
+};
+
+struct request {
+    /** The global lua thread, giving access to dictionary functions. */
+    lua_State *L;
+    /** The transfer socket thanks to which the server will be able to discuss with the client. */
+    int *transferSocket;
 };
 
 /** Creating global variables */
@@ -291,6 +315,24 @@ void debug(const char *messageTemplate, char *charTime, char *content) {
     }
 }
 
+/**
+ * Function reading a request content from a socket.
+ * It will display an error message if a received message is empty, and return an empty buffer in
+ * that case.
+*/
+char *retrieveMessage(int transferSocket) {
+    int messageLength;
+    char *messageBuffer = malloc(MAX_MESSAGE_LENGTH * sizeof(char));
+
+    messageLength = read(transferSocket, messageBuffer, sizeof(messageBuffer));
+    if (messageLength <= 0) {
+        handleRuntimeError("Empty message received\n", getTime());
+    }
+    debug("[INFO] %s: Message received => '%s'\n", getTime(), messageBuffer);
+
+    return messageBuffer;
+}
+
 #pragma endregion Framework functions
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -300,10 +342,10 @@ void debug(const char *messageTemplate, char *charTime, char *content) {
 
 /**
  * Wrapper for the unix `gethostname()` function. This allows normalised calls to standard methods.
-*/
+ */
 char *getMachineName() {
-    char *machineName = malloc(MAX_NAME_LENGTH + 1);
-    gethostname(machineName, MAX_NAME_LENGTH);
+    char *machineName = malloc(MAX_HOST_NAME_LENGTH + 1);
+    gethostname(machineName, MAX_HOST_NAME_LENGTH);
     return machineName;
 }
 
@@ -478,7 +520,7 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
  * initialises each space to a NULL value, which will later be meaning that the place is free.
  */
 void initialiseChannelSubscribers(channel *chanl) {
-    chanl->subscribers = malloc(MAX_CHANNEL_SUBSCRIBERS_COUNT * sizeof(int *));
+    chanl->subscribers = malloc(MAX_CHANNEL_SUBSCRIBERS_COUNT * sizeof(subscriber *));
 
     for(int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
         chanl->subscribers[i] = NULL;
@@ -544,6 +586,19 @@ channel *createChannel(char *channelName) {
 }
 
 /**
+ * Function that safely deletes the subscribers of a channel.
+ */
+void deleteChannelSubscribers(channel *chanl) {
+    for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
+        if (chanl->subscribers[i] != NULL) {
+            // Closing every sockets, just in case.
+            close(*(chanl->subscribers[i]->transferSocket));
+            free(chanl->subscribers[i]);
+        }
+    }
+}
+
+/**
  * Deletes the given channel.
  * This function will fail if the given pointer is `NULL`. It may also display an error message if
  * the channel given to be deleted was not in the channels list. In that case, the channel will
@@ -571,6 +626,7 @@ void deleteChannel(channel *chanl) {
     }
 
     // Freeing the memory
+    deleteChannelSubscribers(chanl);
     free(chanl->subscribers);
     free(chanl);
 }
@@ -597,6 +653,7 @@ channel *findOrCreateChannel(char *channelName) {
  * allowed. In that case it will return false.
  */
 bool subscribeUser(int socket, channel *chanl) {
+    subscriber sub;
     bool isInserted = false;
 
     if (chanl->subscribersCount >= MAX_CHANNEL_SUBSCRIBERS_COUNT) {
@@ -605,7 +662,10 @@ bool subscribeUser(int socket, channel *chanl) {
 
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
         if (chanl->subscribers[i] == NULL) {
-            chanl->subscribers[i] = &socket;
+            sub.transferSocket = &socket;
+            sub.ecoScore = ECO_BASE;
+
+            chanl->subscribers[i] = &sub;
             isInserted = true;
             break;
         }
@@ -635,8 +695,12 @@ bool unsubscribeUser(int socket, channel *chanl) {
     }
 
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
-        if (chanl->subscribers[i] == &socket) {
-            chanl->subscribers[i] = NULL;
+        if (chanl->subscribers[i]->transferSocket == &socket) {
+            // Safely deleting the subscriber
+            close(*(chanl->subscribers[i]->transferSocket));
+            free(chanl->subscribers[i]);
+
+            chanl->subscribers[i] = NULL; // Useful?
             chanl->subscribersCount--;
             isUnsubscribed = true;
             break;
@@ -795,7 +859,7 @@ void updateEcoScore(short ecoValue) {
 /**
  * Will iterate through the list of users subscribed to the current channel, and send the message
  * to all of them.
-*/
+ */
 void deliverMessage(char *messageContent) {
     char *messageBuffer;
 
@@ -814,8 +878,11 @@ void deliverMessage(char *messageContent) {
  * This function will subscribe the current user to the given channel (identified via its name).
  * If there is no corresponding channel, and still room in the allocated array for channels, it
  * will automatically be created.
+ * 
+ * The function will return its success state, to be able to destroy the thread created by the new
+ * request, in case the subscription failed.
  */
-void subscribeTo(int socket, char *channelName) {
+bool subscribeTo(int socket, char *channelName) {
     bool success;
     channel *chanl;
 
@@ -825,20 +892,21 @@ void subscribeTo(int socket, char *channelName) {
     if (chanl == NULL) {
         // Impossible to get or create the desired channel.
         debug("[INFO] %s: Impossible to get or create the channel '%s'\n", getTime(), channelName);
-        return;
+        return false;
     }
 
     success = subscribeUser(socket, chanl);
 
     if (!success) {
         debug("[INFO] %s: Impossible to add the user to the channel '%s'\n", getTime(), channelName);
-        return;
+        return false;
     }
 
     // TODO:
     // - Add a pointer to the channel the user connected itself to, to its transfer thread => thread gesture
     debug("[INFO] %s: User successfully connected to the channel '%s'\n", getTime(), channelName);
     notifySubscriptionSuccess(socket);
+    return true;
 }
 
 /**
@@ -869,6 +937,9 @@ void unsubscribeFrom(int socket, char *channelName) {
     //   to NULL => thread gesture
     debug("[INFO] %s: User successfully disconnected from the channel '%s'\n", getTime(), channelName);
     notifyUnsubscriptionSuccess(socket);
+
+    // Closing the socket to end the transmission
+    close(socket);
 }
 
 /**
@@ -907,9 +978,7 @@ void dispatchRequest(lua_State* L, int socket, int optionCode, char *messageCont
     char *errorMessage;
 
     switch (optionCode) {
-        case OPTION_SUBSCRIBE:
-            subscribeTo(socket, messageContent);
-            break;
+        // subscribing option not allowed: here the thread is already subscribed to a channel.
 
         case OPTION_UNSUBSCRIBE:
             unsubscribeFrom(socket, messageContent);
@@ -950,24 +1019,68 @@ void dispatchRequest(lua_State* L, int socket, int optionCode, char *messageCont
  * 
  * To detect what option is requested, the function will read the 24 first characters of the buffer.
  * These should contain the option code (`01`) for subscription and (`00`) for sending a message.
+ * 
+ * At the end of the request, this function will escalate whether the request was a subscription
+ * cancellation to its caller.
  */
-void handleRequest(lua_State *L, int socket) {
-    char messageBuffer[MAX_MESSAGE_LENGTH] = {0};
-    int messageLength;
+bool handleRequest(lua_State *L, int socket) {
+    char *messageBuffer;
     char *messageContent;
     int optionCode;
 
     /* Reading request content */
-    messageLength = read(socket, messageBuffer, sizeof(messageBuffer));
-    if (messageLength <= 0) {
-        handleRuntimeError("Empty message received", getTime());
-    }
-    debug("[INFO] %s: Message received => '%s'\n", getTime(), messageBuffer);
+    messageBuffer = retrieveMessage(socket);
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
     messageContent = parseMessage(messageBuffer, &optionCode);
     dispatchRequest(L, socket, optionCode, messageContent, messageBuffer, getTime());
     free(messageContent);
+
+    if (optionCode == OPTION_UNSUBSCRIBE) {
+        return false;
+    }
+    return true;
+}
+
+void *onRequestReceived(void *threadParam) {
+    // For the first request of the thread, we make sure it is a channel subscription. Any other
+    // request will be thrown away, and the thread will be destroyed immediately after.
+    char *messageBuffer;
+    char *messageContent;
+    int optionCode;
+    time_t startTime;
+    bool disconnected = false;
+    request *threadRequest = (request *)threadParam;
+
+    debug("[INFO] %s: Request being received... %s\n", getTime(), "");
+    messageBuffer = retrieveMessage(*threadRequest->transferSocket);
+    messageContent = parseMessage(messageBuffer, &optionCode);
+
+    if (optionCode != OPTION_SUBSCRIBE) {
+        handleRuntimeError("First request must always be a subscription!\n", getTime());
+        flushOutput();
+        return NULL; // Incorrect option code, this will kill the current thread.
+    }
+    if (!subscribeTo(*threadRequest->transferSocket, messageContent)) {
+        handleRuntimeError("Failed to connect to a channel. Connection closed.\n", getTime());
+        flushOutput();
+        return NULL;
+    }
+    flushOutput();
+
+    // Connection is all setup. Other request types may now de received from the socket.
+    startTime = time(NULL);
+    while (!disconnected && (time(NULL) - startTime <= MAX_THREAD_INACTIVITY_TIME)) {
+        disconnected = !handleRequest(threadRequest->L, *threadRequest->transferSocket);
+        flushOutput();
+    }
+
+    // In case we got out of the loop because of inactivity, we disconnect the user manually
+    if (!disconnected) {
+        unsubscribeFrom(*threadRequest->transferSocket, messageContent);
+    }
+
+    return NULL;
 }
 
 int main(int argc, char **argv) {
@@ -987,12 +1100,22 @@ int main(int argc, char **argv) {
     L = initialiseLua();
     buildDictionaries(L);
 
+    // TODO:
+    // - Take the dictionaries out of lua, in order to transfer memory ownership to the c programme
+    // - Threads will have to own their own lua thread, giving them access to the read-only
+    //   dictionaries, and this way, the stack interferences that may occur will vanish away in
+    //   oblivion. 🥳
+    //   => Lua scripts may have to be broken down to separate files.
+
 
     /* Handling requests */
     listen(connectionSocketDescriptor, REQUEST_QUEUE_SIZE);
     debug("[INFO] %s: Server started listening on port %s\n\n", getTime(), intToChars(PORT_NUMBER));
 
-    for (;;) {
+    for (;;) { // Listening for incoming requests
+        pthread_t transferThread;
+        request threadRequest;
+
         currentAddressLength = sizeof(currentClientAddress);
 
         transmissionSocketDescriptor = accept(
@@ -1005,10 +1128,9 @@ int main(int argc, char **argv) {
             continue;
         }
 
-        debug("[INFO] %s: Request being received... %s\n", getTime(), "");
-        handleRequest(L, transmissionSocketDescriptor);
-        close(transmissionSocketDescriptor);
-        flushOutput();
+        threadRequest.L = L;
+        threadRequest.transferSocket = &transmissionSocketDescriptor;
+        pthread_create(&transferThread, NULL, onRequestReceived, (void *)&threadRequest);
     }
 }
 
