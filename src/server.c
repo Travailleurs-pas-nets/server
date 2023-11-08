@@ -74,7 +74,9 @@ struct subscriber {
      */
     int *transferSocket;
     /** The user's eco-score. */
-    int ecoScore;
+    unsigned short ecoScore;
+    /** The channel the subscriber is subscribed to. */
+    channel* chanl;
 };
 
 struct channel {
@@ -117,7 +119,7 @@ char *getTime() {
 
 /**
  * Function that converts an integer in a char array.
-*/
+ */
 char *intToChars(int in) {
     char *result;
     int nextIndex = 0;
@@ -298,7 +300,7 @@ void handleRuntimeError(char *message, char *charTime) {
 /**
  * Function that handles critical errors.
  * These errors takes the `[CRITICAL]` tag and causes the program to stop.
-*/
+ */
 void handleCriticalError(char *message, char *charTime) {
     handleError("[CRITICAL]", message, charTime);
     exit(1);
@@ -319,7 +321,7 @@ void debug(const char *messageTemplate, char *charTime, char *content) {
  * Function reading a request content from a socket.
  * It will display an error message if a received message is empty, and return an empty buffer in
  * that case.
-*/
+ */
 char *retrieveMessage(int transferSocket) {
     int messageLength;
     char *messageBuffer = malloc(MAX_MESSAGE_LENGTH * sizeof(char));
@@ -410,7 +412,7 @@ int configureConnectionSocket(sockaddr_in localAddress) {
 
 /**
  * Function to initialise the Lua API.
-*/
+ */
 lua_State *initialiseLua() {
     int executionState;
     lua_State *L = luaL_newstate(); // called L by convention
@@ -603,7 +605,7 @@ void deleteChannelSubscribers(channel *chanl) {
  * This function will fail if the given pointer is `NULL`. It may also display an error message if
  * the channel given to be deleted was not in the channels list. In that case, the channel will
  * still be deleted anyway, so please do not use it afterwards.
-*/
+ */
 void deleteChannel(channel *chanl) {
     bool isDeleted = false;
 
@@ -650,22 +652,23 @@ channel *findOrCreateChannel(char *channelName) {
  * This function will try to add a user (identified via its transfer socket descriptor) to the list
  * of subscribers of the given channel.
  * It may fail if the amount of users subscribed to the channel is equal to the maximum amount
- * allowed. In that case it will return false.
+ * allowed. In that case it will return NULL.
  */
-bool subscribeUser(int socket, channel *chanl) {
-    subscriber sub;
+subscriber *subscribeUser(int socket, channel *chanl) {
+    subscriber *sub = malloc(sizeof(subscriber));
     bool isInserted = false;
 
     if (chanl->subscribersCount >= MAX_CHANNEL_SUBSCRIBERS_COUNT) {
-        return false;
+        return NULL;
     }
 
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
         if (chanl->subscribers[i] == NULL) {
-            sub.transferSocket = &socket;
-            sub.ecoScore = ECO_BASE;
+            sub->transferSocket = &socket;
+            sub->ecoScore = ECO_BASE;
+            sub->chanl = chanl;
 
-            chanl->subscribers[i] = &sub;
+            chanl->subscribers[i] = sub;
             isInserted = true;
             break;
         }
@@ -674,11 +677,11 @@ bool subscribeUser(int socket, channel *chanl) {
     if (!isInserted) {
         chanl->subscribersCount = MAX_CHANNEL_SUBSCRIBERS_COUNT;
         handleRuntimeError("Channel subscribers array unexpectedly full. => Count corrected.\n", getTime());
-        return false;
+        return NULL;
     }
 
     chanl->subscribersCount++;
-    return true;
+    return sub;
 }
 
 /**
@@ -686,29 +689,32 @@ bool subscribeUser(int socket, channel *chanl) {
  * list of subscribers of the given channel.
  * It may fail if there is no user subscribed to the channel, or if the user that wants to
  * unsubscribe isn't actually subscribed to the channel.
-*/
-bool unsubscribeUser(int socket, channel *chanl) {
+ */
+bool unsubscribeUser(subscriber *sub) {
     bool isUnsubscribed = false;
 
-    if (chanl->subscribersCount <= 0) {
+    if (sub->chanl->subscribersCount <= 0) {
         return false;
     }
 
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
-        if (chanl->subscribers[i]->transferSocket == &socket) {
+        if (sub->chanl->subscribers[i]->transferSocket == sub->transferSocket) {
             // Safely deleting the subscriber
-            close(*(chanl->subscribers[i]->transferSocket));
-            free(chanl->subscribers[i]);
+            close(*(sub->chanl->subscribers[i]->transferSocket));
+            free(sub->chanl->subscribers[i]);
 
-            chanl->subscribers[i] = NULL; // Useful?
-            chanl->subscribersCount--;
+            sub->chanl->subscribers[i] = NULL; // Useful?
+            sub->chanl->subscribersCount--;
             isUnsubscribed = true;
+
+            // Just in case
+            sub->chanl = NULL;
             break;
         }
     }
 
-    if (chanl->subscribersCount == 0) {
-        deleteChannel(chanl);
+    if (sub->chanl->subscribersCount == 0) {
+        deleteChannel(sub->chanl);
     }
 
     return isUnsubscribed;
@@ -759,7 +765,7 @@ char *parseMessage(char *messageBuffer, int *optionCode) {
  * Function that will iterate through the words within the message from the client, trying to
  * identify pollutant or ecological words, and editing the content of the three last variables
  * accordingly.
-*/
+ */
 void browseForPollutantsAndEcologicalWords(lua_State *L, char **messageWords, 
         char **pollutantWords, int *pollutantWordsCount, int *ecologicalWordsCount) {
     int localPollutantWordsCount = 0;
@@ -800,7 +806,7 @@ short computeMessageLengthEcoPenalty(int charCount) {
  * This function will compute the eco-value of a message. This value will then have to be added to
  * the current eco-value. It may be negative.
  */
-short computeMessageEcoValue(lua_State *L, char *messageContent) {
+short computeMessageEcoValue(lua_State *L, char *messageContent, unsigned short current) {
     char **messageWords;
     char **pollutantWords;
     unsigned short wordCount;
@@ -825,8 +831,7 @@ short computeMessageEcoValue(lua_State *L, char *messageContent) {
 
     if ((-1) * deltaPollutantAndEcologicalWords > ECO_MAX_POLLUTANT_WORDS_TOLERATED) {
         replacePollutantWords(L, pollutantWords, pollutantWordsCount);
-        // TODO:
-        // - Return the opposite of the current eco-score (so that it becomes 0) => thread gesture
+        return ((-1) * current);
     }
 
     /* We want to cap the increase at the same value as we tolerate pollutant words. */
@@ -838,38 +843,35 @@ short computeMessageEcoValue(lua_State *L, char *messageContent) {
 /**
  * Retrieves the eco-score for the current user in the current channel.
  */
-unsigned short getEcoScore() {
-    // TODO:
-    // - Store the eco-score somewhere it is possible to retrieve during a request.
-    return 0;
+unsigned short getEcoScore(subscriber *sub) {
+    return sub->ecoScore;
 }
 
 /**
  * This function will add the given eco-value to the current eco-score.
  */
-void updateEcoScore(short ecoValue) {
-    // TODO:
-    // - Change the eco-score value by adding the given eco-value to the stored eco-score => thread gesture
+void updateEcoScore(subscriber *sub, short ecoValue) {
+    sub->ecoScore += ecoValue;
 
     // call to getter may be removed later because we will have the value there.
-    // +, not sure the default conversion from unsigned short to int is valid.
-    debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore()));
+    debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore(sub)));
 }
 
 /**
  * Will iterate through the list of users subscribed to the current channel, and send the message
  * to all of them.
  */
-void deliverMessage(char *messageContent) {
+void deliverMessage(char *messageContent, channel *chanl) {
     char *messageBuffer;
 
     debug("[INFO] %s: delivering the message '%s'\n", getTime(), messageContent);
 
     messageBuffer = assembleRequestContent(CLI_DISTRIBUTE_MESSAGE, messageContent);
-
-    // TODO:
-    // - Iterate through the list of subscribers for the current channel and send the message to
-    //   each of them => thread gesture.
+    for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
+        if (chanl->subscribers[i] != NULL) {
+            write(*chanl->subscribers[i]->transferSocket, messageBuffer, strlen(messageBuffer) + 1);
+        }
+    }
 
     debug("[INFO] %s: Message delivered to channel '%s'\n", getTime(), "???");
 }
@@ -882,8 +884,8 @@ void deliverMessage(char *messageContent) {
  * The function will return its success state, to be able to destroy the thread created by the new
  * request, in case the subscription failed.
  */
-bool subscribeTo(int socket, char *channelName) {
-    bool success;
+subscriber *subscribeTo(int socket, char *channelName) {
+    subscriber *sub;
     channel *chanl;
 
     debug("[INFO] %s: Request dispatched to the subscription service%s\n", getTime(), "");
@@ -892,54 +894,41 @@ bool subscribeTo(int socket, char *channelName) {
     if (chanl == NULL) {
         // Impossible to get or create the desired channel.
         debug("[INFO] %s: Impossible to get or create the channel '%s'\n", getTime(), channelName);
-        return false;
+        return NULL;
     }
 
-    success = subscribeUser(socket, chanl);
+    sub = subscribeUser(socket, chanl);
 
-    if (!success) {
+    if (sub == NULL) {
         debug("[INFO] %s: Impossible to add the user to the channel '%s'\n", getTime(), channelName);
-        return false;
+        return NULL;
     }
 
-    // TODO:
-    // - Add a pointer to the channel the user connected itself to, to its transfer thread => thread gesture
     debug("[INFO] %s: User successfully connected to the channel '%s'\n", getTime(), channelName);
     notifySubscriptionSuccess(socket);
-    return true;
+    return sub;
 }
 
 /**
  * This function will unsubscribe the current user from the given channel (identified via its name).
  * If the user is the only one subscribed to that specific channel, it will be deleted.
  */
-void unsubscribeFrom(int socket, char *channelName) {
+void unsubscribeFrom(subscriber *sub, char *channelName) {
     bool success;
-    channel *chanl;
 
     debug("[INFO] %s: Request dispatched to the unsubscription service%s\n", getTime(), "");
-    
-    chanl = findChannelByName(channelName);
-    if (chanl == NULL) {
-        handleRuntimeError("No matching channel", getTime());
-        return;
-    }
-
-    success = unsubscribeUser(socket, chanl);
+    success = unsubscribeUser(sub);
 
     if (!success) {
         debug("[INFO] %s: Impossible to remove the user from the channel '%s'\n", getTime(), channelName);
         return;
     }
 
-    // TODO:
-    // - Set the pointer to the channel the user disconnected itself from, in its transfer thread
-    //   to NULL => thread gesture
     debug("[INFO] %s: User successfully disconnected from the channel '%s'\n", getTime(), channelName);
-    notifyUnsubscriptionSuccess(socket);
+    notifyUnsubscriptionSuccess(*sub->transferSocket);
 
     // Closing the socket to end the transmission
-    close(socket);
+    close(*sub->transferSocket);
 }
 
 /**
@@ -947,49 +936,49 @@ void unsubscribeFrom(int socket, char *channelName) {
  * current one.
  * At the same time, it will compute the eco-value of the message and update the user's eco-score
  * accordingly.
-*/
-void sendMessage(lua_State *L, int socket, char *messageContent) {
+ */
+void sendMessage(lua_State *L, subscriber *sub, char *messageContent) {
     debug("[INFO] %s: Request dispatched to the message delivering service%s\n", getTime(), "");
     // updating the eco-score:
-    short messageEcoValue = computeMessageEcoValue(L, messageContent);
-    updateEcoScore(messageEcoValue);
+    short messageEcoValue = computeMessageEcoValue(L, messageContent, getEcoScore(sub));
+    updateEcoScore(sub, messageEcoValue);
 
     // delivering the message to the subscribed clients
-    deliverMessage(messageContent);
+    deliverMessage(messageContent, sub->chanl);
 }
 
 /**
  * Function that gets the eco-score for the current client, and formats it into a request before to
  * send the result back to the client.
  */
-void communicateEcoScore(int socket) {
+void communicateEcoScore(subscriber *sub) {
     debug("[INFO] %s: Request dispatched to the eco-score command service%s\n", getTime(), "");
-    unsigned short ecoScore = getEcoScore();
+    unsigned short ecoScore = getEcoScore(sub);
     char *requestBuffer = assembleRequestContent(CLI_SEND_ECO_SCORE, intToChars(ecoScore));
     
-    write(socket, requestBuffer, strlen(requestBuffer) + 1);
+    write(*sub->transferSocket, requestBuffer, strlen(requestBuffer) + 1);
 }
 
 /**
  * Dispatches the request to the right function according to the received option code.
  * If no option code matches, this function will display an error message.
  */
-void dispatchRequest(lua_State* L, int socket, int optionCode, char *messageContent, char *messageBuffer, char *charTime) {
+void dispatchRequest(lua_State* L, subscriber *sub, int optionCode, char *messageContent, char *messageBuffer, char *charTime) {
     char *errorMessage;
 
     switch (optionCode) {
         // subscribing option not allowed: here the thread is already subscribed to a channel.
 
         case OPTION_UNSUBSCRIBE:
-            unsubscribeFrom(socket, messageContent);
+            unsubscribeFrom(sub, messageContent);
             break;
 
         case OPTION_SEND_MESSAGE:
-            sendMessage(L, socket, messageContent);
+            sendMessage(L, sub, messageContent);
             break;
 
         case OPTION_GET_ECO_SCORE:
-            communicateEcoScore(socket);
+            communicateEcoScore(sub);
             break;
 
         default:
@@ -1023,17 +1012,17 @@ void dispatchRequest(lua_State* L, int socket, int optionCode, char *messageCont
  * At the end of the request, this function will escalate whether the request was a subscription
  * cancellation to its caller.
  */
-bool handleRequest(lua_State *L, int socket) {
+bool handleRequest(lua_State *L, subscriber *sub) {
     char *messageBuffer;
     char *messageContent;
     int optionCode;
 
     /* Reading request content */
-    messageBuffer = retrieveMessage(socket);
+    messageBuffer = retrieveMessage(*sub->transferSocket);
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
     messageContent = parseMessage(messageBuffer, &optionCode);
-    dispatchRequest(L, socket, optionCode, messageContent, messageBuffer, getTime());
+    dispatchRequest(L, sub, optionCode, messageContent, messageBuffer, getTime());
     free(messageContent);
 
     if (optionCode == OPTION_UNSUBSCRIBE) {
@@ -1048,6 +1037,7 @@ void *onRequestReceived(void *threadParam) {
     char *messageBuffer;
     char *messageContent;
     int optionCode;
+    subscriber *sub;
     time_t startTime;
     bool disconnected = false;
     request *threadRequest = (request *)threadParam;
@@ -1061,7 +1051,8 @@ void *onRequestReceived(void *threadParam) {
         flushOutput();
         return NULL; // Incorrect option code, this will kill the current thread.
     }
-    if (!subscribeTo(*threadRequest->transferSocket, messageContent)) {
+    sub = subscribeTo(*threadRequest->transferSocket, messageContent);
+    if (sub == NULL) {
         handleRuntimeError("Failed to connect to a channel. Connection closed.\n", getTime());
         flushOutput();
         return NULL;
@@ -1071,13 +1062,13 @@ void *onRequestReceived(void *threadParam) {
     // Connection is all setup. Other request types may now de received from the socket.
     startTime = time(NULL);
     while (!disconnected && (time(NULL) - startTime <= MAX_THREAD_INACTIVITY_TIME)) {
-        disconnected = !handleRequest(threadRequest->L, *threadRequest->transferSocket);
+        disconnected = !handleRequest(threadRequest->L, sub);
         flushOutput();
     }
 
     // In case we got out of the loop because of inactivity, we disconnect the user manually
     if (!disconnected) {
-        unsubscribeFrom(*threadRequest->transferSocket, messageContent);
+        unsubscribeFrom(sub, messageContent);
     }
 
     return NULL;
