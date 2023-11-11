@@ -53,3 +53,5 @@ dkms.conf
 
 # binary files from compilation
 /bin/*
+/lib/*
+/include/*

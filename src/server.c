@@ -7,7 +7,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 //                         PROGRAMME INITIALISATION                          //
 ///////////////////////////////////////////////////////////////////////////////
-#pragma region Programme initialisation
+#pragma region Programme_initialisation
 #include <stdlib.h>
 #include <stdio.h>
 #include <linux/types.h>    /* For the sockets */
@@ -23,33 +23,22 @@
 #include <lauxlib.h>
 #include <lualib.h>
 #include <pthread.h>        /* For threads */
+
+/** Frameworks functions */
+#include "../include/tpnll.h"
+#include "../include/tpnn.h"
+
+/** Generic constants */
 #define LUA_STACK_TOP -1
 #define LUA_MIN_SWAP_LENGTH 3
-#define MAX_HOST_NAME_LENGTH 256
-#define MAX_MESSAGE_LENGTH 1024
 #define MAX_CHANNEL_COUNT 5
 #define MAX_CHANNEL_SUBSCRIBERS_COUNT 10
 #define MAX_THREAD_INACTIVITY_TIME 3000 // 5 minutes
 #define PORT_NUMBER 5000
 #define REQUEST_QUEUE_SIZE 5
-#define DEBUG 1
-
-/** Defining option codes */
-#define OPTION_CODE_LENGTH 24
-#define OPTION_SUBSCRIBE 0
-#define OPTION_UNSUBSCRIBE 1
-#define OPTION_SEND_MESSAGE 2
-#define OPTION_GET_ECO_SCORE 3
-
-/** Defining client option codes */
-#define CLI_SUBSCRIBED 0
-#define CLI_UNSUBSCRIBED 1
-#define CLI_DISTRIBUTE_MESSAGE 2
-#define CLI_SEND_ECO_SCORE 3
-#define CLI_DISTRIBUTE_REMINDER 4
+#define MODE LL_DEBUG
 
 /** Defining eco-score computation constants */
-#define ECO_MIN 0
 #define ECO_MAX 100
 #define ECO_BASE 50
 #define ECO_MAX_POLLUTANT_WORDS_TOLERATED 15
@@ -60,9 +49,9 @@
 
 /** Defining the structures */
 typedef struct sockaddr sockaddr;
-typedef struct sockaddr_in sockaddr_in;
-typedef struct hostent hostent;
 typedef struct servent servent;
+
+
 typedef struct subscriber subscriber;
 typedef struct channel channel;
 typedef struct request request;
@@ -99,291 +88,12 @@ struct request {
 channel *channels[MAX_CHANNEL_COUNT] = {0};
 int channelsCount = 0;
 
-#pragma endregion Programme initialisation
+#pragma endregion Programme_initialisation
 
 ///////////////////////////////////////////////////////////////////////////////
-//                            FRAMEWORK FUNCTIONS                            //
+//                           SERVER CRUD FUNCTIONS                           //
 ///////////////////////////////////////////////////////////////////////////////
-#pragma region Framework functions
-
-/**
- * Function that returns the current time (when calling the method) as a char array.
- */
-char *getTime() {
-    time_t rawTime = time(NULL);
-    char *charTime = ctime(&rawTime);
-    charTime[strlen(charTime) - 1] = '\0'; /* Removing the line break at the end. */
-
-    return charTime;
-}
-
-/**
- * Function that converts an integer in a char array.
- */
-char *intToChars(int in) {
-    char *result;
-    int nextIndex = 0;
-    bool startedWriting = false;
-
-    if (in >= 0) {
-        int size = 10; /* Max length of a 32 bits int. */
-        result = malloc(size);
-    } else {
-        int size = 11; /* +1 for the minus sign. */
-        result = malloc(size);
-        result[nextIndex] = '-';
-        nextIndex++;
-    }
-
-    for (int power = 9; power >= 0; power--) {
-        int value = (int) floor(in / pow(10, power));
-
-        /* second condition because we don't want to stop writing the string once we started,
-           otherwise we will lose powers of ten in the resulting array of characters. */
-        if (value >= 1 || startedWriting) {
-            result[nextIndex] = value + 48;
-            nextIndex++;
-
-            in -= value * (int)pow(10, power);
-            startedWriting = true;
-        }
-    }
-
-    result[nextIndex] = '\0';
-    return result;
-}
-
-/**
- * Function that concatenates the given amount parameters.
- */
-char *concat(unsigned short argCount, ...) {
-    va_list argList;
-    char *concatenated;
-    int size = 1;
-    
-    va_start(argList, argCount);
-    for (int i = 0; i < argCount; i++) {
-        size += strlen(va_arg(argList, char *));
-    }
-    va_end(argList);
-    
-    concatenated = malloc(size + 1);
-    *concatenated = '\0';
-
-    va_start(argList, argCount);
-    for (int i = 0; i < argCount; i++) {
-        strcat(concatenated, va_arg(argList, char *));
-    }
-    va_end(argList);
-
-    return concatenated;
-}
-
-
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-value"
-/**
- * Function that splits a string into an array of strings, using the given delimiter.
- * 
- * The pragmas are because we use values pointed to, which will trigger a warning at compile time,
- * saying a computed value is not used, while it actually is.
- */
-char **split(char *stringToSplit, char delimiter, unsigned short *wordCount) {
-    char *token;
-    char **tokens;
-    char delimiterAsString[1] = { delimiter };
-    unsigned short delimiterCount = 0;
-    unsigned short localWordCount = 0;
-    char *stringDuplicate = strdup(stringToSplit); // Copying the string to ensure it stays unchanged.
-
-    // First, we iterate through the string to find the number of times the delimiter is present.
-    for (int i = 0; stringDuplicate[i] != '\0'; i++) {
-        if (stringDuplicate[i] == delimiter) {
-            delimiterCount++;
-        }
-    }
-
-    // Then we create an array of a capacity of 1 more than the delimiter count (because there is
-    // one more element than there are delimiters).
-    tokens = malloc(sizeof(char *) * (delimiterCount + 2));
-
-    // And finally we fill our array with strings.
-    token = strtok(stringDuplicate, delimiterAsString);
-    while (token) {
-        tokens[localWordCount] = token;
-        localWordCount++;
-        token = strtok(NULL, delimiterAsString);
-    }
-    
-    *wordCount = localWordCount;
-    tokens[localWordCount + 1] = 0;
-    return tokens;
-}
-#pragma GCC diagnostic pop
-
-/**
- * Function that creates a string of the given length, filled with question marks.
- */
-char *createQuestionMarkString(int length) {
-    char *word = malloc(length);
-
-    for (int i = 0; i < length - 1; i++) {
-        word[i] = '?';
-    }
-
-    word[length - 1] = '\0';
-    return word;
-}
-
-/**
- * Function that flushes the console output in debug mode.
- */
-void flushOutput() {
-    if (DEBUG == 1) {
-        printf("\n");
-    }
-}
-
-/**
- * Function that creates a request's option code from its unsigned short representation.
- */
-char *assembleOptionCode(unsigned short optionCode) {
-    char *codeValue;
-    char *optionCodeString = malloc(sizeof(char) * (OPTION_CODE_LENGTH + 1));
-
-    codeValue = intToChars(optionCode);
-    optionCodeString[0] = '0';
-    for (int i = 1; i <= strlen(codeValue); i++) {
-        optionCodeString[i] = codeValue[i - 1];
-    }
-    for (int i = strlen(codeValue) + 1; i < OPTION_CODE_LENGTH; i++) {
-        optionCodeString[i] = ' ';
-    }
-
-    optionCodeString[OPTION_CODE_LENGTH] = '\0';
-    return optionCodeString;
-}
-
-/**
- * Function that creates a request content from its code and message.
- */
-char *assembleRequestContent(unsigned short optionCode, char *content) {
-    char *optionCodeString = assembleOptionCode(optionCode);
-    return concat(2, optionCodeString, content);
-}
-
-/**
- * Function that handles errors.
- * If the debug mode is enabled, these will be displayed in the terminal, otherwise they will be
- * written to a log file.
- */
-void handleError(char *errorTag, char *message, char *charTime) {
-    char *errorMessage = concat(5, errorTag, " ", charTime, ": ", message);
-
-    if (DEBUG == 1) {
-        perror(errorMessage);
-    } else {
-        // TODO (writing in a log file)
-    }
-
-    //free(errorMessage);
-}
-
-/**
- * Function that handles runtime errors.
- * These errors takes the `[ERROR]` tag.
- */
-void handleRuntimeError(char *message, char *charTime) {
-    handleError("[ERROR]", message, charTime);
-}
-
-/**
- * Function that handles critical errors.
- * These errors takes the `[CRITICAL]` tag and causes the program to stop.
- */
-void handleCriticalError(char *message, char *charTime) {
-    handleError("[CRITICAL]", message, charTime);
-    exit(1);
-}
-
-/**
- * Function that handles standard debug display.
- * If the debug mode is enabled, it will display the informations in the terminal, otherwise it
- * won't display anything.
- */
-void debug(const char *messageTemplate, char *charTime, char *content) {
-    if (DEBUG == 1) {
-        printf(messageTemplate, charTime, content);
-    }
-}
-
-/**
- * Function reading a request content from a socket.
- * It will display an error message if a received message is empty, and return an empty buffer in
- * that case.
- */
-char *retrieveMessage(int transferSocket) {
-    int messageLength;
-    char *messageBuffer = malloc(MAX_MESSAGE_LENGTH * sizeof(char));
-
-    messageLength = read(transferSocket, messageBuffer, sizeof(messageBuffer));
-    if (messageLength <= 0) {
-        handleRuntimeError("Empty message received\n", getTime());
-    }
-    debug("[INFO] %s: Message received => '%s'\n", getTime(), messageBuffer);
-
-    return messageBuffer;
-}
-
-#pragma endregion Framework functions
-
-///////////////////////////////////////////////////////////////////////////////
-//                        SERVER FRAMEWORK FUNCTIONS                         //
-///////////////////////////////////////////////////////////////////////////////
-#pragma region Server framework functions
-
-/**
- * Wrapper for the unix `gethostname()` function. This allows normalised calls to standard methods.
- */
-char *getMachineName() {
-    char *machineName = malloc(MAX_HOST_NAME_LENGTH + 1);
-    gethostname(machineName, MAX_HOST_NAME_LENGTH);
-    return machineName;
-}
-
-/**
- * Function that will create and return a pointer towards the hostent.
- * It will throw a critical error if the retrieved host is null before return.
- */
-hostent *retrieveHost() {
-    hostent *host;
-    char *hostName;
-    
-    hostName = getMachineName();
-    host = gethostbyname(hostName);
-
-    if (host == NULL) {
-        char *errorMessage = concat(3, "Server not found ('", hostName, "')\n");
-        handleCriticalError(errorMessage, getTime());
-    }
-
-    return host;
-}
-
-/**
- * Will configure the local address to the given host and port.
- */
-sockaddr_in configureLocalAddress(hostent *host, unsigned short port) {
-    sockaddr_in localAddress;
-
-    bcopy((char *)host->h_addr_list[0], (char *)&localAddress.sin_addr, host->h_length);
-    localAddress.sin_family = host->h_addrtype;
-    localAddress.sin_addr.s_addr = INADDR_ANY;
-
-    localAddress.sin_port = htons(port);
-
-    return localAddress;
-}
+#pragma region Server_CRUD_functions
 
 /**
  * This function configures the server's connection socket. It creates an IPv4 TCP socket, and
@@ -395,7 +105,7 @@ int configureConnectionSocket(sockaddr_in localAddress) {
 
     connectionSocketDescriptor = socket(AF_INET, SOCK_STREAM, 0);
     if (connectionSocketDescriptor < 0) {
-        handleCriticalError("Failed to create the connection socket\n", getTime());
+        handleCriticalError("Failed to create the connection socket\n", getTime(), MODE);
     }
 
     operationResultCode = bind(
@@ -404,7 +114,7 @@ int configureConnectionSocket(sockaddr_in localAddress) {
         sizeof(localAddress)
     );
     if (operationResultCode < 0) {
-        handleCriticalError("Failed to bind the socket to the connection address\n", getTime());
+        handleCriticalError("Failed to bind the socket to the connection address\n", getTime(), MODE);
     }
 
     return connectionSocketDescriptor;
@@ -420,7 +130,7 @@ lua_State *initialiseLua() {
     
     executionState = luaL_dofile(L, "./bin/scripts/dictionaries.lua");
     if (executionState != LUA_OK) {
-        handleCriticalError("Failed to initialise the Lua API!\n", getTime());
+        handleCriticalError("Failed to initialise the Lua API!\n", getTime(), MODE);
     }
 
     return L;
@@ -435,55 +145,11 @@ void buildDictionaries(lua_State *L) {
     lua_getglobal(L, "create_dictionaries"); // pushes the function to the top of the stack.
 
     if (!lua_isfunction(L, LUA_STACK_TOP)) {
-        handleCriticalError("Failed to find 'create_dictionaries' global function!\n", getTime());
+        handleCriticalError("Failed to find 'create_dictionaries' global function!\n", getTime(), MODE);
     }
 
     lua_pcall(L, 0, 0, 0);
     // Now the two dictionaries in the script are in the Lua stack, full of words.
-}
-
-/**
- * Tells whether the given word is considered pollutant or not.
- * - `true` (1) if it is;
- * - `false` (0) otherwise.
- * 
- * Note: the time complexity of this function in the worst case scenario is O(n), where n is the
- * number of letters in the word to check, not the number of words in the dictionary!
- */
-bool isWordPollutant(lua_State *L, char *word) {
-    lua_getglobal(L, "is_word_pollutant"); // pushes the function to the top of the stack.
-
-    if (!lua_isfunction(L, LUA_STACK_TOP)) {
-        handleRuntimeError("Failed to find 'is_word_pollutant' global function!\n", getTime());
-        return false;
-    }
-
-    // Pushing the parameter to the Lua API
-    lua_pushstring(L, word);
-    lua_pcall(L, 1, 1, 0);
-    return lua_toboolean(L, LUA_STACK_TOP); // Retrieving the returned value from the Lua stack
-}
-
-/**
- * Tells whether the given word is considered ecological or not.
- * - `true` (1) if it is;
- * - `false` (0) otherwise.
- * 
- * Note: the time complexity of this function in the worst case scenario is O(n), where n is the
- * number of letters in the word to check, not the number of words in the dictionary!
- */
-bool isWordEcological(lua_State *L, char *word) {
-    lua_getglobal(L, "is_word_ecological"); // pushes the function to the top of the stack.
-
-    if (!lua_isfunction(L, LUA_STACK_TOP)) {
-        handleRuntimeError("Failed to find 'is_word_ecological' global function!\n", getTime());
-        return false;
-    }
-
-    // Pushing the parameter to the Lua API
-    lua_pushstring(L, word);
-    lua_pcall(L, 1, 1, 0);
-    return lua_toboolean(L, LUA_STACK_TOP); // Retrieving the returned value from the Lua stack.
 }
 
 /**
@@ -500,7 +166,7 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
             lua_getglobal(L, "swap_for_ecological_word"); // pushes the function to the top of the stack.
 
             if (!lua_isfunction(L, LUA_STACK_TOP)) {
-                handleRuntimeError("Failed to find 'swap_for_ecological_word' global function!\n", getTime());
+                handleRuntimeError("Failed to find 'swap_for_ecological_word' global function!\n", getTime(), MODE);
                 return;
             }
 
@@ -577,7 +243,7 @@ channel *createChannel(char *channelName) {
 
     if (!isInserted) {
         channelsCount = MAX_CHANNEL_COUNT;
-        handleRuntimeError("Channel array unexpectedly full. => Count corrected.\n", getTime());
+        handleRuntimeError("Channel array unexpectedly full. => Count corrected.\n", getTime(), MODE);
         free(chanl->subscribers);
         free(chanl);
         return NULL;
@@ -610,7 +276,7 @@ void deleteChannel(channel *chanl) {
     bool isDeleted = false;
 
     if (chanl == NULL) {
-        handleRuntimeError("Failed to delete a channel. => NULL pointer given.\n", getTime());
+        handleRuntimeError("Failed to delete a channel. => NULL pointer given.\n", getTime(), MODE);
         return;
     }
 
@@ -624,7 +290,7 @@ void deleteChannel(channel *chanl) {
     }
 
     if (!isDeleted) {
-        handleRuntimeError("Channel not found within the array. => memory freed anyway.\n", getTime());
+        handleRuntimeError("Channel not found within the array. => memory freed anyway.\n", getTime(), MODE);
     }
 
     // Freeing the memory
@@ -646,6 +312,74 @@ channel *findOrCreateChannel(char *channelName) {
     }
 
     return chanl;
+}
+
+/**
+ * Retrieves the eco-score for the current user in the current channel.
+ */
+unsigned short getEcoScore(subscriber *sub) {
+    return sub->ecoScore;
+}
+
+/**
+ * This function will add the given eco-value to the current eco-score.
+ */
+void updateEcoScore(subscriber *sub, short ecoValue) {
+    sub->ecoScore += ecoValue;
+
+    // call to getter may be removed later because we will have the value there.
+    debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore(sub)), MODE);
+}
+
+#pragma endregion Server_CRUD_functions
+
+///////////////////////////////////////////////////////////////////////////////
+//                              FLOW FUNCTIONS                               //
+///////////////////////////////////////////////////////////////////////////////
+#pragma region Flow_functions
+
+/**
+ * Tells whether the given word is considered pollutant or not.
+ * - `true` (1) if it is;
+ * - `false` (0) otherwise.
+ * 
+ * Note: the time complexity of this function in the worst case scenario is O(n), where n is the
+ * number of letters in the word to check, not the number of words in the dictionary!
+ */
+bool isWordPollutant(lua_State *L, char *word) {
+    lua_getglobal(L, "is_word_pollutant"); // pushes the function to the top of the stack.
+
+    if (!lua_isfunction(L, LUA_STACK_TOP)) {
+        handleRuntimeError("Failed to find 'is_word_pollutant' global function!\n", getTime(), MODE);
+        return false;
+    }
+
+    // Pushing the parameter to the Lua API
+    lua_pushstring(L, word);
+    lua_pcall(L, 1, 1, 0);
+    return lua_toboolean(L, LUA_STACK_TOP); // Retrieving the returned value from the Lua stack
+}
+
+/**
+ * Tells whether the given word is considered ecological or not.
+ * - `true` (1) if it is;
+ * - `false` (0) otherwise.
+ * 
+ * Note: the time complexity of this function in the worst case scenario is O(n), where n is the
+ * number of letters in the word to check, not the number of words in the dictionary!
+ */
+bool isWordEcological(lua_State *L, char *word) {
+    lua_getglobal(L, "is_word_ecological"); // pushes the function to the top of the stack.
+
+    if (!lua_isfunction(L, LUA_STACK_TOP)) {
+        handleRuntimeError("Failed to find 'is_word_ecological' global function!\n", getTime(), MODE);
+        return false;
+    }
+
+    // Pushing the parameter to the Lua API
+    lua_pushstring(L, word);
+    lua_pcall(L, 1, 1, 0);
+    return lua_toboolean(L, LUA_STACK_TOP); // Retrieving the returned value from the Lua stack.
 }
 
 /**
@@ -676,7 +410,7 @@ subscriber *subscribeUser(int socket, channel *chanl) {
 
     if (!isInserted) {
         chanl->subscribersCount = MAX_CHANNEL_SUBSCRIBERS_COUNT;
-        handleRuntimeError("Channel subscribers array unexpectedly full. => Count corrected.\n", getTime());
+        handleRuntimeError("Channel subscribers array unexpectedly full. => Count corrected.\n", getTime(), MODE);
         return NULL;
     }
 
@@ -725,7 +459,7 @@ bool unsubscribeUser(subscriber *sub) {
  * sends a message to the client of the subscriber stating the subscription succeeded.
  */
 void notifySubscriptionSuccess(int socket) {
-    char *requestBuffer = assembleRequestContent(CLI_SUBSCRIBED, "0");
+    char *requestBuffer = assembleRequestContent(NWK_CLI_SUBSCRIBED, "0");
 
     write(socket, requestBuffer, strlen(requestBuffer) + 1);
 }
@@ -735,28 +469,9 @@ void notifySubscriptionSuccess(int socket) {
  * succeeded. It sends a message to the client stating the subscription was cancelled.
  */
 void notifyUnsubscriptionSuccess(int socket) {
-    char *requestBuffer = assembleRequestContent(CLI_UNSUBSCRIBED, "0");
+    char *requestBuffer = assembleRequestContent(NWK_CLI_UNSUBSCRIBED, "0");
 
     write(socket, requestBuffer, strlen(requestBuffer) + 1);
-}
-
-#pragma endregion Server framework functions
-
-///////////////////////////////////////////////////////////////////////////////
-//                              FLOW FUNCTIONS                               //
-///////////////////////////////////////////////////////////////////////////////
-#pragma region Flow functions
-
-/**
- * This function will separate the option code from the message content.
- */
-char *parseMessage(char *messageBuffer, int *optionCode) {
-    char *messageContent = strdup(messageBuffer + OPTION_CODE_LENGTH);
-
-    messageBuffer[OPTION_CODE_LENGTH] = '\0';
-    sscanf(messageBuffer, "%d", optionCode);
-
-    return messageContent;
 }
 
 #pragma GCC diagnostic push
@@ -814,7 +529,7 @@ short computeMessageEcoValue(lua_State *L, char *messageContent, unsigned short 
     int pollutantWordsCount = 0;
     int ecologicalWordsCount = 0;
 
-    debug("[INFO] %s: Computing eco-value for the message from '%s'\n", getTime(), "???");
+    debug("[INFO] %s: Computing eco-value for the message from '%s'\n", getTime(), "???", MODE);
 
     messageWords = split(messageContent, ' ', &wordCount);
 
@@ -841,39 +556,22 @@ short computeMessageEcoValue(lua_State *L, char *messageContent, unsigned short 
 }
 
 /**
- * Retrieves the eco-score for the current user in the current channel.
- */
-unsigned short getEcoScore(subscriber *sub) {
-    return sub->ecoScore;
-}
-
-/**
- * This function will add the given eco-value to the current eco-score.
- */
-void updateEcoScore(subscriber *sub, short ecoValue) {
-    sub->ecoScore += ecoValue;
-
-    // call to getter may be removed later because we will have the value there.
-    debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore(sub)));
-}
-
-/**
  * Will iterate through the list of users subscribed to the current channel, and send the message
  * to all of them.
  */
 void deliverMessage(char *messageContent, channel *chanl) {
     char *messageBuffer;
 
-    debug("[INFO] %s: delivering the message '%s'\n", getTime(), messageContent);
+    debug("[INFO] %s: delivering the message '%s'\n", getTime(), messageContent, MODE);
 
-    messageBuffer = assembleRequestContent(CLI_DISTRIBUTE_MESSAGE, messageContent);
+    messageBuffer = assembleRequestContent(NWK_CLI_DISTRIBUTE_MESSAGE, messageContent);
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
         if (chanl->subscribers[i] != NULL) {
             write(*chanl->subscribers[i]->transferSocket, messageBuffer, strlen(messageBuffer) + 1);
         }
     }
 
-    debug("[INFO] %s: Message delivered to channel '%s'\n", getTime(), "???");
+    debug("[INFO] %s: Message delivered to channel '%s'\n", getTime(), "???", MODE);
 }
 
 /**
@@ -888,23 +586,23 @@ subscriber *subscribeTo(int socket, char *channelName) {
     subscriber *sub;
     channel *chanl;
 
-    debug("[INFO] %s: Request dispatched to the subscription service%s\n", getTime(), "");
+    debug("[INFO] %s: Request dispatched to the subscription service%s\n", getTime(), "", MODE);
 
     chanl = findOrCreateChannel(channelName);
     if (chanl == NULL) {
         // Impossible to get or create the desired channel.
-        debug("[INFO] %s: Impossible to get or create the channel '%s'\n", getTime(), channelName);
+        debug("[INFO] %s: Impossible to get or create the channel '%s'\n", getTime(), channelName, MODE);
         return NULL;
     }
 
     sub = subscribeUser(socket, chanl);
 
     if (sub == NULL) {
-        debug("[INFO] %s: Impossible to add the user to the channel '%s'\n", getTime(), channelName);
+        debug("[INFO] %s: Impossible to add the user to the channel '%s'\n", getTime(), channelName, MODE);
         return NULL;
     }
 
-    debug("[INFO] %s: User successfully connected to the channel '%s'\n", getTime(), channelName);
+    debug("[INFO] %s: User successfully connected to the channel '%s'\n", getTime(), channelName, MODE);
     notifySubscriptionSuccess(socket);
     return sub;
 }
@@ -916,15 +614,15 @@ subscriber *subscribeTo(int socket, char *channelName) {
 void unsubscribeFrom(subscriber *sub, char *channelName) {
     bool success;
 
-    debug("[INFO] %s: Request dispatched to the unsubscription service%s\n", getTime(), "");
+    debug("[INFO] %s: Request dispatched to the unsubscription service%s\n", getTime(), "", MODE);
     success = unsubscribeUser(sub);
 
     if (!success) {
-        debug("[INFO] %s: Impossible to remove the user from the channel '%s'\n", getTime(), channelName);
+        debug("[INFO] %s: Impossible to remove the user from the channel '%s'\n", getTime(), channelName, MODE);
         return;
     }
 
-    debug("[INFO] %s: User successfully disconnected from the channel '%s'\n", getTime(), channelName);
+    debug("[INFO] %s: User successfully disconnected from the channel '%s'\n", getTime(), channelName, MODE);
     notifyUnsubscriptionSuccess(*sub->transferSocket);
 
     // Closing the socket to end the transmission
@@ -938,7 +636,7 @@ void unsubscribeFrom(subscriber *sub, char *channelName) {
  * accordingly.
  */
 void sendMessage(lua_State *L, subscriber *sub, char *messageContent) {
-    debug("[INFO] %s: Request dispatched to the message delivering service%s\n", getTime(), "");
+    debug("[INFO] %s: Request dispatched to the message delivering service%s\n", getTime(), "", MODE);
     // updating the eco-score:
     short messageEcoValue = computeMessageEcoValue(L, messageContent, getEcoScore(sub));
     updateEcoScore(sub, messageEcoValue);
@@ -952,9 +650,9 @@ void sendMessage(lua_State *L, subscriber *sub, char *messageContent) {
  * send the result back to the client.
  */
 void communicateEcoScore(subscriber *sub) {
-    debug("[INFO] %s: Request dispatched to the eco-score command service%s\n", getTime(), "");
+    debug("[INFO] %s: Request dispatched to the eco-score command service%s\n", getTime(), "", MODE);
     unsigned short ecoScore = getEcoScore(sub);
-    char *requestBuffer = assembleRequestContent(CLI_SEND_ECO_SCORE, intToChars(ecoScore));
+    char *requestBuffer = assembleRequestContent(NWK_CLI_SEND_ECO_SCORE, intToChars(ecoScore));
     
     write(*sub->transferSocket, requestBuffer, strlen(requestBuffer) + 1);
 }
@@ -969,15 +667,15 @@ void dispatchRequest(lua_State* L, subscriber *sub, int optionCode, char *messag
     switch (optionCode) {
         // subscribing option not allowed: here the thread is already subscribed to a channel.
 
-        case OPTION_UNSUBSCRIBE:
+        case NWK_SRV_UNSUBSCRIBE:
             unsubscribeFrom(sub, messageContent);
             break;
 
-        case OPTION_SEND_MESSAGE:
+        case NWK_SRV_SEND_MESSAGE:
             sendMessage(L, sub, messageContent);
             break;
 
-        case OPTION_GET_ECO_SCORE:
+        case NWK_SRV_GET_ECO_SCORE:
             communicateEcoScore(sub);
             break;
 
@@ -985,12 +683,12 @@ void dispatchRequest(lua_State* L, subscriber *sub, int optionCode, char *messag
             /* Invalid code => displaying the error */
             errorMessage = concat(3, "Invalid option code ('", messageBuffer, "')\n");
 
-            handleRuntimeError(errorMessage, charTime);
+            handleRuntimeError(errorMessage, charTime, MODE);
             free(errorMessage);
     }
 }
 
-#pragma endregion Flow functions
+#pragma endregion Flow_functions
 
 ///////////////////////////////////////////////////////////////////////////////
 //                         MAIN ALGORITHM FUNCTIONS                          //
@@ -1018,14 +716,14 @@ bool handleRequest(lua_State *L, subscriber *sub) {
     int optionCode;
 
     /* Reading request content */
-    messageBuffer = retrieveMessage(*sub->transferSocket);
+    messageBuffer = retrieveMessage(*sub->transferSocket, MODE);
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
     messageContent = parseMessage(messageBuffer, &optionCode);
     dispatchRequest(L, sub, optionCode, messageContent, messageBuffer, getTime());
     free(messageContent);
 
-    if (optionCode == OPTION_UNSUBSCRIBE) {
+    if (optionCode == NWK_SRV_UNSUBSCRIBE) {
         return false;
     }
     return true;
@@ -1042,28 +740,28 @@ void *onRequestReceived(void *threadParam) {
     bool disconnected = false;
     request *threadRequest = (request *)threadParam;
 
-    debug("[INFO] %s: Request being received... %s\n", getTime(), "");
-    messageBuffer = retrieveMessage(*threadRequest->transferSocket);
+    debug("[INFO] %s: Request being received... %s\n", getTime(), "", MODE);
+    messageBuffer = retrieveMessage(*threadRequest->transferSocket, MODE);
     messageContent = parseMessage(messageBuffer, &optionCode);
 
-    if (optionCode != OPTION_SUBSCRIBE) {
-        handleRuntimeError("First request must always be a subscription!\n", getTime());
-        flushOutput();
+    if (optionCode != NWK_SRV_SUBSCRIBE) {
+        handleRuntimeError("First request must always be a subscription!\n", getTime(), MODE);
+        flushOutput(MODE);
         return NULL; // Incorrect option code, this will kill the current thread.
     }
     sub = subscribeTo(*threadRequest->transferSocket, messageContent);
     if (sub == NULL) {
-        handleRuntimeError("Failed to connect to a channel. Connection closed.\n", getTime());
-        flushOutput();
+        handleRuntimeError("Failed to connect to a channel. Connection closed.\n", getTime(), MODE);
+        flushOutput(MODE);
         return NULL;
     }
-    flushOutput();
+    flushOutput(MODE);
 
     // Connection is all setup. Other request types may now de received from the socket.
     startTime = time(NULL);
     while (!disconnected && (time(NULL) - startTime <= MAX_THREAD_INACTIVITY_TIME)) {
         disconnected = !handleRequest(threadRequest->L, sub);
-        flushOutput();
+        flushOutput(MODE);
     }
 
     // In case we got out of the loop because of inactivity, we disconnect the user manually
@@ -1086,7 +784,7 @@ int main(int argc, char **argv) {
 
     /* Setting up the server*/
     hostPointer = retrieveHost();
-    localAddress = configureLocalAddress(hostPointer, PORT_NUMBER);
+    localAddress = configureLocalAddress(hostPointer, PORT_NUMBER, NWK_SERVER);
     connectionSocketDescriptor = configureConnectionSocket(localAddress);
     L = initialiseLua();
     buildDictionaries(L);
@@ -1101,7 +799,7 @@ int main(int argc, char **argv) {
 
     /* Handling requests */
     listen(connectionSocketDescriptor, REQUEST_QUEUE_SIZE);
-    debug("[INFO] %s: Server started listening on port %s\n\n", getTime(), intToChars(PORT_NUMBER));
+    debug("[INFO] %s: Server started listening on port %s\n\n", getTime(), intToChars(PORT_NUMBER), MODE);
 
     for (;;) { // Listening for incoming requests
         pthread_t transferThread;
@@ -1115,7 +813,7 @@ int main(int argc, char **argv) {
             (unsigned int *restrict)&currentAddressLength
         );
         if (transmissionSocketDescriptor < 0) {
-            handleRuntimeError("Connection with client failed", getTime());
+            handleRuntimeError("Connection with client failed", getTime(), MODE);
             continue;
         }
 
