@@ -19,10 +19,12 @@
 #include <math.h>           /* To get pow() and floor() functions */
 #include <stdbool.h>        /* For booleans...... */
 #include <stdarg.h>         /* For variadic functions */
-#include <lua.h>            /* Lua lib, allowing to incorporate Lua code to C programs */
-#include <lauxlib.h>
-#include <lualib.h>
 #include <pthread.h>        /* For threads */
+
+/** Lua headers */
+#include "../include/lua.h"            /* Lua lib, allowing to incorporate Lua code to C programs */
+#include "../include/lauxlib.h"
+#include "../include/lualib.h"
 
 /** Frameworks functions */
 #include "../include/tpnll.h"
@@ -186,6 +188,9 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
 /**
  * This function allocates memory for the subscribers array contained in the channel structure, and
  * initialises each space to a NULL value, which will later be meaning that the place is free.
+ * 
+ * ⚠️ WARNING: This function contains a hidden `malloc`, therefore, when you are done with the
+ * value, you should free its memory.
  */
 void initialiseChannelSubscribers(channel *chanl) {
     chanl->subscribers = malloc(MAX_CHANNEL_SUBSCRIBERS_COUNT * sizeof(subscriber *));
@@ -217,6 +222,9 @@ channel *findChannelByName(const char *channelName) {
  * This function will fail if the amount of channel on the server is already equal to the maximum
  * amount defined by a constant.
  * In that case, the returned value will be a NULL pointer.
+ * 
+ * ⚠️ WARNING: This function contains a hidden `malloc`, therefore, when you are done with the
+ * value, you should free its memory.
  */
 channel *createChannel(char *channelName) {
     channel *chanl;
@@ -387,6 +395,9 @@ bool isWordEcological(lua_State *L, char *word) {
  * of subscribers of the given channel.
  * It may fail if the amount of users subscribed to the channel is equal to the maximum amount
  * allowed. In that case it will return NULL.
+ * 
+ * ⚠️ WARNING: This function contains a hidden `malloc`, therefore, when you are done with the
+ * value, you should free its memory.
  */
 subscriber *subscribeUser(int socket, channel *chanl) {
     subscriber *sub = malloc(sizeof(subscriber));
@@ -462,6 +473,8 @@ void notifySubscriptionSuccess(int socket) {
     char *requestBuffer = assembleRequestContent(NWK_CLI_SUBSCRIBED, "0");
 
     write(socket, requestBuffer, strlen(requestBuffer) + 1);
+
+    free(requestBuffer);
 }
 
 /**
@@ -472,6 +485,8 @@ void notifyUnsubscriptionSuccess(int socket) {
     char *requestBuffer = assembleRequestContent(NWK_CLI_UNSUBSCRIBED, "0");
 
     write(socket, requestBuffer, strlen(requestBuffer) + 1);
+
+    free(requestBuffer);
 }
 
 #pragma GCC diagnostic push
@@ -549,6 +564,12 @@ short computeMessageEcoValue(lua_State *L, char *messageContent, unsigned short 
         return ((-1) * current);
     }
 
+    free(pollutantWords);
+    for (int i = 0; i < wordCount; i++) {
+        free(messageWords[i]);
+    }
+    free(messageWords);
+
     /* We want to cap the increase at the same value as we tolerate pollutant words. */
     return (deltaPollutantAndEcologicalWords > ECO_MAX_POLLUTANT_WORDS_TOLERATED?
                 ECO_MAX_POLLUTANT_WORDS_TOLERATED: deltaPollutantAndEcologicalWords
@@ -572,6 +593,8 @@ void deliverMessage(char *messageContent, channel *chanl) {
     }
 
     debug("[INFO] %s: Message delivered to channel '%s'\n", getTime(), "???", MODE);
+
+    free(messageBuffer);
 }
 
 /**
@@ -655,6 +678,8 @@ void communicateEcoScore(subscriber *sub) {
     char *requestBuffer = assembleRequestContent(NWK_CLI_SEND_ECO_SCORE, intToChars(ecoScore));
     
     write(*sub->transferSocket, requestBuffer, strlen(requestBuffer) + 1);
+
+    free(requestBuffer);
 }
 
 /**
@@ -719,8 +744,10 @@ bool handleRequest(lua_State *L, subscriber *sub) {
     messageBuffer = retrieveMessage(*sub->transferSocket, MODE);
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
-    messageContent = parseMessage(messageBuffer, &optionCode);
+    messageContent = parseMessage(messageBuffer, &optionCode, MODE);
     dispatchRequest(L, sub, optionCode, messageContent, messageBuffer, getTime());
+
+    free(messageBuffer);
     free(messageContent);
 
     if (optionCode == NWK_SRV_UNSUBSCRIBE) {
@@ -742,7 +769,8 @@ void *onRequestReceived(void *threadParam) {
 
     debug("[INFO] %s: Request being received... %s\n", getTime(), "", MODE);
     messageBuffer = retrieveMessage(*threadRequest->transferSocket, MODE);
-    messageContent = parseMessage(messageBuffer, &optionCode);
+    messageContent = parseMessage(messageBuffer, &optionCode, MODE);
+    free(messageBuffer);
 
     if (optionCode != NWK_SRV_SUBSCRIBE) {
         handleRuntimeError("First request must always be a subscription!\n", getTime(), MODE);
@@ -761,6 +789,7 @@ void *onRequestReceived(void *threadParam) {
     startTime = time(NULL);
     while (!disconnected && (time(NULL) - startTime <= MAX_THREAD_INACTIVITY_TIME)) {
         disconnected = !handleRequest(threadRequest->L, sub);
+        startTime = time(NULL);
         flushOutput(MODE);
     }
 
@@ -768,6 +797,8 @@ void *onRequestReceived(void *threadParam) {
     if (!disconnected) {
         unsubscribeFrom(sub, messageContent);
     }
+
+    free(messageContent);
 
     return NULL;
 }
@@ -783,7 +814,7 @@ int main(int argc, char **argv) {
     
 
     /* Setting up the server*/
-    hostPointer = retrieveHost();
+    hostPointer = retrieveHost(MODE);
     localAddress = configureLocalAddress(hostPointer, PORT_NUMBER, NWK_SERVER);
     connectionSocketDescriptor = configureConnectionSocket(localAddress);
     L = initialiseLua();
