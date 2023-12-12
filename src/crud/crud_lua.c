@@ -39,9 +39,9 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
     for (int i = 0; i < count; i++) {
         const char *word;
 
-        if (strlen(pollutantWords[i]) < LUA_MIN_SWAP_LENGTH) {
+        if (wrdlen(pollutantWords[i]) < LUA_MIN_SWAP_LENGTH) {
             // Word shorter than the shortest word in the ecological dictionary
-            word = createQuestionMarkString(strlen(pollutantWords[i]));
+            word = createQuestionMarkString(wrdlen(pollutantWords[i]));
         } else {
             lua_getglobal(L, "swap_for_ecological_word"); // pushes the function to the top of the stack.
 
@@ -51,13 +51,13 @@ void replacePollutantWords(lua_State *L, char **pollutantWords, int count) {
             }
 
             // Pushing the parameter to the Lua API
-            lua_pushnumber(L, strlen(pollutantWords[i]));
+            lua_pushnumber(L, wrdlen(pollutantWords[i]));
             lua_pcall(L, 1, 1, 0);
             word = lua_tostring(L, LUA_STACK_TOP);
         }
 
         // Replacing the pollutant word's letters one by one.
-        for (int j = 0; j < strlen(word); j++) {
+        for (int j = 0; j < wrdlen(word); j++) {
             pollutantWords[i][j] = word[j];
         }
     }

@@ -66,7 +66,7 @@ subscriber *subscribeTo(int socket, char *channelName, channel **channels, int *
         return NULL;
     }
 
-    sub = subscribeUser(socket, chanl);
+    sub = subscribeUser(&socket, chanl);
 
     if (sub == NULL) {
         debug("[INFO] %s: Impossible to add the user to the channel '%s'\n", getTime(), channelName, MODE);

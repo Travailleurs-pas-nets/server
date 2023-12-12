@@ -22,7 +22,7 @@ extern void updateEcoScore(subscriber *sub, short ecoValue);
  * ⚠️ WARNING: This function contains a hidden `malloc`, therefore, when you are done with the
  * value, you should free its memory.
  */
-extern subscriber *subscribeUser(int socket, channel *chanl);
+extern subscriber *subscribeUser(int *socket, channel *chanl);
 
 /**
  * This function will try to remove a user (identified via its transfer socket descriptor) from the

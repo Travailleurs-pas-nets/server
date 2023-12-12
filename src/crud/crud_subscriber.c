@@ -11,9 +11,17 @@ unsigned short getEcoScore(subscriber *sub) {
  * This function will add the given eco-value to the current eco-score.
  */
 void updateEcoScore(subscriber *sub, short ecoValue) {
-    sub->ecoScore += ecoValue;
+    if (ecoValue*-1 > sub->ecoScore) {
+        sub->ecoScore = 0;
 
-    debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore(sub)), MODE);
+    } else if (ecoValue + sub->ecoScore > ECO_MAX) {
+        sub->ecoScore = ECO_MAX;
+
+    } else {
+        sub->ecoScore += ecoValue;
+    }
+
+    //debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore(sub)), MODE);
 }
 
 /**
@@ -25,7 +33,7 @@ void updateEcoScore(subscriber *sub, short ecoValue) {
  * ⚠️ WARNING: This function contains a hidden `malloc`, therefore, when you are done with the
  * value, you should free its memory.
  */
-subscriber *subscribeUser(int socket, channel *chanl) {
+subscriber *subscribeUser(int *socket, channel *chanl) {
     subscriber *sub = malloc(sizeof(subscriber));
     bool isInserted = false;
 
@@ -35,7 +43,7 @@ subscriber *subscribeUser(int socket, channel *chanl) {
 
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
         if (chanl->subscribers[i] == NULL) {
-            sub->transferSocket = &socket;
+            sub->transferSocket = socket;
             sub->ecoScore = ECO_BASE;
             sub->chanl = chanl;
 
@@ -70,16 +78,16 @@ bool unsubscribeUser(subscriber *sub, channel **channels, int *channelsCount) {
 
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
         if (sub->chanl->subscribers[i]->transferSocket == sub->transferSocket) {
-            // Safely deleting the subscriber
-            close(*(sub->chanl->subscribers[i]->transferSocket));
-            free(sub->chanl->subscribers[i]);
 
-            sub->chanl->subscribers[i] = NULL; // Useful?
+            // Breaking the link to the current user in the concerned channel
+            sub->chanl->subscribers[i] = memcpy(sub->chanl->subscribers[i], sub, sizeof(subscriber)); // changing the pointer
+            sub->chanl->subscribers[i] = NULL;
             sub->chanl->subscribersCount--;
             isUnsubscribed = true;
 
-            // Just in case
-            sub->chanl = NULL;
+            // ⚠️ Warning: subscriber must be neither freed, nor closed! We need to send a notification
+            // to the client before doing that!
+
             break;
         }
     }
@@ -88,5 +96,6 @@ bool unsubscribeUser(subscriber *sub, channel **channels, int *channelsCount) {
         deleteChannel(sub->chanl, channels, channelsCount);
     }
 
+    sub->chanl = NULL;
     return isUnsubscribed;
 }

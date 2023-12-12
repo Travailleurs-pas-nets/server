@@ -24,7 +24,7 @@ channel *findChannelByName(const char *channelName, channel **channels) {
     channel *chanl = NULL;
 
     for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
-        if (strcmp(channels[i]->name, channelName) == 0) {
+        if (channels[i] != NULL && strcmp(channels[i]->name, channelName) == 0) {
             chanl = channels[i];
         }
     }
@@ -46,8 +46,9 @@ channel *findChannelByName(const char *channelName, channel **channels) {
 channel *createChannel(char *channelName, channel **channels, int *channelsCount) {
     channel *chanl;
     bool isInserted = false;
+    int localChannelsCount = *channelsCount;
 
-    if (*channelsCount >= MAX_CHANNEL_COUNT) {
+    if (localChannelsCount >= MAX_CHANNEL_COUNT) {
         return NULL;
     }
 
@@ -74,7 +75,7 @@ channel *createChannel(char *channelName, channel **channels, int *channelsCount
         return NULL;
     }
 
-    *channelsCount++;
+    *channelsCount = ++localChannelsCount;
     return chanl;
 }
 #pragma GCC diagnostic pop
@@ -102,6 +103,7 @@ void deleteChannelSubscribers(channel *chanl) {
  */
 void deleteChannel(channel *chanl, channel **channels, int *channelsCount) {
     bool isDeleted = false;
+    int localChannelsCount = *channelsCount;
 
     if (chanl == NULL) {
         handleRuntimeError("Failed to delete a channel. => NULL pointer given.\n", getTime(), MODE);
@@ -112,7 +114,7 @@ void deleteChannel(channel *chanl, channel **channels, int *channelsCount) {
     for (int i = 0; i < MAX_CHANNEL_COUNT; i++) {
         if (channels[i] == chanl) { // Effectively looking for a reference
             channels[i] = NULL; // Removing the pointer to the given channel from the channel pointers list
-            *channelsCount--;
+            localChannelsCount--;
             isDeleted = true;
             break;
         }
@@ -121,6 +123,8 @@ void deleteChannel(channel *chanl, channel **channels, int *channelsCount) {
     if (!isDeleted) {
         handleRuntimeError("Channel not found within the array. => memory freed anyway.\n", getTime(), MODE);
     }
+
+    *channelsCount = localChannelsCount;
 
     // Freeing the memory
     deleteChannelSubscribers(chanl);
