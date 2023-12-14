@@ -16,23 +16,33 @@
 #include "crud_subscriber_updateEcoScore.c"
 #include "crud_subscriber_subscribeUser.c"
 #include "crud_subscriber_unsubscribeUser.c"
+#include "business_pollution_computation_isWordPollutant.c"
+#include "business_pollution_computation_isWordEcological.c"
+#include "business_pollution_computation_browseForPollutantsAndEcologicalWords.c"
+#include "business_pollution_computation_computeMessageLengthEcoPenalty.c"
+#include "business_pollution_computation_computeMessageEcoValue.c"
 
 // Defining the list of tests to execute:
 static MunitTest test_array[] = {
-    { (char *) "/crud/socket/configureConnectionSocket    \t\t", test_configureConnectionSocket, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/lua/initialiseLua                   \t\t", test_initialiseLua, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/lua/buildDictionaries               \t\t", test_buildDictionaries, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/lua/replacePollutantWords           \t\t", test_replacePollutantWords, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/initialiseChannelSubscribers\t\t", test_initialiseChannelSubscribers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/findChannelByName           \t\t", test_findChannelByName, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/createChannel               \t\t", test_createChannel, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/deleteChannelSubscribers    \t\t", test_deleteChannelSubscribers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/deleteChannel               \t\t", test_deleteChannel, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/findOrCreateChannel         \t\t", test_findOrCreateChannel, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/getEcoScore                 \t\t", test_getEcoScore, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/updateEcoScore              \t\t", test_updateEcoScore, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/subscribeUser               \t\t", test_subscribeUser, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
-    { (char *) "/crud/channel/unsubscribeUser             \t\t", test_unsubscribeUser, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/socket/configureConnectionSocket                               \t\t", test_configureConnectionSocket, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/lua/initialiseLua                                              \t\t", test_initialiseLua, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/lua/buildDictionaries                                          \t\t", test_buildDictionaries, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/lua/replacePollutantWords                                      \t\t", test_replacePollutantWords, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/initialiseChannelSubscribers                           \t\t", test_initialiseChannelSubscribers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/findChannelByName                                      \t\t", test_findChannelByName, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/createChannel                                          \t\t", test_createChannel, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/deleteChannelSubscribers                               \t\t", test_deleteChannelSubscribers, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/deleteChannel                                          \t\t", test_deleteChannel, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/findOrCreateChannel                                    \t\t", test_findOrCreateChannel, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/getEcoScore                                            \t\t", test_getEcoScore, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/updateEcoScore                                         \t\t", test_updateEcoScore, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/subscribeUser                                          \t\t", test_subscribeUser, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/crud/channel/unsubscribeUser                                        \t\t", test_unsubscribeUser, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/business/pollution_computation/isWordPollutant                      \t\t", test_isWordPollutant, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/business/pollution_computation/isWordEcological                     \t\t", test_isWordEcological, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/business/pollution_computation/browseForPollutantsAndEcologicalWords\t\t", test_browseForPollutantsAndEcologicalWords, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/business/pollution_computation/computeMessageLengthEcoPenalty       \t\t", test_computeMessageLengthEcoPenalty, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
+    { (char *) "/business/pollution_computation/computeMessageEcoValue               \t\t", test_computeMessageEcoValue, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL },
     
     // Last item must be this one (it is used to identify that this is the end of the list).
     { NULL, NULL, NULL, NULL, MUNIT_TEST_OPTION_NONE, NULL }
