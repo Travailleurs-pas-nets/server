@@ -309,7 +309,7 @@ facebook
 apple
 microsoft
 ali
-wish4
+wish
 cdiscount
 feu
 feux
@@ -317,3 +317,12 @@ humain
 humains
 humaine
 humaines
+derrick
+forage
+forer
+fore
+fores
+forons
+forez
+forent
+foré
