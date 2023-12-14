@@ -21,7 +21,7 @@ void updateEcoScore(subscriber *sub, short ecoValue) {
         sub->ecoScore += ecoValue;
     }
 
-    //debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore(sub)), MODE);
+    debug("[INFO] %s: New eco-score = %s\n", getTime(), intToChars(getEcoScore(sub)), MODE);
 }
 
 /**
