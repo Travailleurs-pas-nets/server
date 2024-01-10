@@ -14,7 +14,7 @@
 #define MAX_THREAD_INACTIVITY_TIME 3000 // 5 minutes
 #define PORT_NUMBER 5000
 #define REQUEST_QUEUE_SIZE 5
-#define MODE LL_DEBUG
+#define MODE LL_PROD
 
 /** Defining eco-score computation constants */
 #define ECO_MAX 100

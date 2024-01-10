@@ -77,7 +77,7 @@ bool unsubscribeUser(subscriber *sub, channel **channels, int *channelsCount) {
     }
 
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
-        if (sub->chanl->subscribers[i]->transferSocket == sub->transferSocket) {
+        if (sub->chanl->subscribers[i] != NULL && sub->chanl->subscribers[i]->transferSocket == sub->transferSocket) {
 
             // Breaking the link to the current user in the concerned channel
             sub->chanl->subscribers[i] = memcpy(sub->chanl->subscribers[i], sub, sizeof(subscriber)); // changing the pointer

@@ -7,7 +7,7 @@
 void notifySubscriptionSuccess(int socket) {
     char *requestBuffer = assembleRequestContent(NWK_CLI_SUBSCRIBED, "0");
 
-    write(socket, requestBuffer, strlen(requestBuffer) + 1);
+    write(socket, requestBuffer, NWK_MAX_MESSAGE_LENGTH);
 
     free(requestBuffer);
 }
@@ -19,7 +19,7 @@ void notifySubscriptionSuccess(int socket) {
 void notifyUnsubscriptionSuccess(int socket) {
     char *requestBuffer = assembleRequestContent(NWK_CLI_UNSUBSCRIBED, "0");
 
-    write(socket, requestBuffer, strlen(requestBuffer) + 1);
+    write(socket, requestBuffer, NWK_MAX_MESSAGE_LENGTH);
 
     free(requestBuffer);
 }
@@ -36,7 +36,7 @@ void deliverMessage(char *messageContent, channel *chanl) {
     messageBuffer = assembleRequestContent(NWK_CLI_DISTRIBUTE_MESSAGE, messageContent);
     for (int i = 0; i < MAX_CHANNEL_SUBSCRIBERS_COUNT; i++) {
         if (chanl->subscribers[i] != NULL) {
-            write(*chanl->subscribers[i]->transferSocket, messageBuffer, strlen(messageBuffer) + 1);
+            write(*chanl->subscribers[i]->transferSocket, messageBuffer, NWK_MAX_MESSAGE_LENGTH);
         }
     }
 
@@ -50,8 +50,8 @@ void deliverMessage(char *messageContent, channel *chanl) {
  * If there is no corresponding channel, and still room in the allocated array for channels, it
  * will automatically be created.
  * 
- * The function will return its success state, to be able to destroy the thread created by the new
- * request, in case the subscription failed.
+ * The function will return the created subscriber (or null if it failed), to be able to destroy
+ * the thread created by the new request, in case the subscription failed.
  */
 subscriber *subscribeTo(int socket, char *channelName, channel **channels, int *channelsCount) {
     subscriber *sub;
@@ -125,7 +125,7 @@ void communicateEcoScore(subscriber *sub) {
     unsigned short ecoScore = getEcoScore(sub);
     char *requestBuffer = assembleRequestContent(NWK_CLI_SEND_ECO_SCORE, intToChars(ecoScore));
     
-    write(*sub->transferSocket, requestBuffer, strlen(requestBuffer) + 1);
+    write(*sub->transferSocket, requestBuffer, NWK_MAX_MESSAGE_LENGTH);
 
     free(requestBuffer);
 }

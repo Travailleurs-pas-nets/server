@@ -31,8 +31,8 @@ extern void deliverMessage(char *messageContent, channel *chanl);
  * If there is no corresponding channel, and still room in the allocated array for channels, it
  * will automatically be created.
  * 
- * The function will return its success state, to be able to destroy the thread created by the new
- * request, in case the subscription failed.
+ * The function will return the created subscriber (or null if it failed), to be able to destroy
+ * the thread created by the new request, in case the subscription failed.
  */
 extern subscriber *subscribeTo(int socket, char *channelName, channel **channels, int *channelsCount);
 
