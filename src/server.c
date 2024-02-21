@@ -48,13 +48,21 @@ int channelsCount = 0;
  * At the end of the request, this function will escalate whether the request was a subscription
  * cancellation to its caller.
  */
-bool handleRequest(lua_State *L, subscriber *sub) {
+int handleRequest(lua_State *L, subscriber *sub) {
     char *messageBuffer;
     char *messageContent;
     int optionCode;
 
     /* Reading request content */
     messageBuffer = retrieveMessage(*sub->transferSocket, MODE);
+    if (strlen(messageBuffer) < 24) {
+        // Request is rejected because there aren't even enough characters for the operation code.
+        // Therefore we return and leave this method early to make the inactivity verification possible.
+        //
+        // We do not return false though because being in this case could simply just mean that we are
+        // waiting for the user's input.
+        return TREATMENT_NOT_EXECUTED;
+    }
 
     /* Parsing the operation code and message and sending the request to the right treatment func */
     messageContent = parseMessage(messageBuffer, &optionCode, MODE);
@@ -64,9 +72,9 @@ bool handleRequest(lua_State *L, subscriber *sub) {
     free(messageContent);
 
     if (optionCode == NWK_SRV_UNSUBSCRIBE) {
-        return false;
+        return TREATMENT_DISCONNECTED;
     }
-    return true;
+    return TREATMENT_EXECUTED;
 }
 
 void *onRequestReceived(void *threadParam) {
@@ -77,20 +85,25 @@ void *onRequestReceived(void *threadParam) {
     int optionCode;
     subscriber *sub;
     time_t startTime;
-    bool disconnected = false;
+    int requestTreatment = TREATMENT_NOT_EXECUTED;
     request *threadRequest = (request *)threadParam;
 
     debug("[INFO] %s: Request being received... %s\n", getTime(), "", MODE);
-    messageBuffer = retrieveMessage(*threadRequest->transferSocket, MODE);
+    messageBuffer = retrieveMessage(threadRequest->transferSocket, MODE);
+    debug("[INFO] %s: Starting to parse the message... %s\n", getTime(), "", MODE);
     messageContent = parseMessage(messageBuffer, &optionCode, MODE);
+    debug("[INFO] %s: Trying to free the message buffer... %s\n", getTime(), "", MODE);
     free(messageBuffer);
 
+    debug("[INFO] %s: Checking that the request is a subscription... %s\n", getTime(), "", MODE);
     if (optionCode != NWK_SRV_SUBSCRIBE) {
         handleRuntimeError("First request must always be a subscription!\n", getTime(), MODE);
         flushOutput(MODE);
         return NULL; // Incorrect option code, this will kill the current thread.
     }
-    sub = subscribeTo(*threadRequest->transferSocket, messageContent, channels, &channelsCount);
+    debug("[INFO] %s: Trying to subscribe to a channel... %s\n", getTime(), "", MODE);
+    sub = subscribeTo(threadRequest->transferSocket, messageContent, channels, &channelsCount);
+    debug("[INFO] %s: Checking subscription state... %s\n", getTime(), "", MODE);
     if (sub == NULL) {
         handleRuntimeError("Failed to connect to a channel. Connection closed.\n", getTime(), MODE);
         flushOutput(MODE);
@@ -98,16 +111,20 @@ void *onRequestReceived(void *threadParam) {
     }
     flushOutput(MODE);
 
-    // Connection is all setup. Other request types may now de received from the socket.
+    // Connection is all setup. Other request types may now be received from the socket.
     startTime = time(NULL);
-    while (!disconnected && (time(NULL) - startTime <= MAX_THREAD_INACTIVITY_TIME)) {
-        disconnected = !handleRequest(threadRequest->L, sub);
-        startTime = time(NULL);
+    while (requestTreatment != TREATMENT_DISCONNECTED && (time(NULL) - startTime <= MAX_THREAD_INACTIVITY_TIME)) {
+        requestTreatment = handleRequest(threadRequest->L, sub);
+        
+        if (requestTreatment == TREATMENT_EXECUTED) {
+            startTime = time(NULL);
+            // User did something, so they are not inactive. Timer before inaction deletion reset.
+        }
         flushOutput(MODE);
     }
 
     // In case we got out of the loop because of inactivity, we disconnect the user manually
-    if (!disconnected) {
+    if (requestTreatment != TREATMENT_DISCONNECTED) {
         unsubscribeFrom(sub, messageContent, channels, &channelsCount);
     }
 
@@ -159,11 +176,14 @@ int main(int argc, char **argv) {
         if (transmissionSocketDescriptor < 0) {
             handleRuntimeError("Connection with client failed", getTime(), MODE);
             continue;
+        } else if (transmissionSocketDescriptor == 0) {
+            continue;
         }
 
         threadRequest.L = L;
-        threadRequest.transferSocket = &transmissionSocketDescriptor;
+        threadRequest.transferSocket = transmissionSocketDescriptor;
         pthread_create(&transferThread, NULL, onRequestReceived, (void *)&threadRequest);
+        transmissionSocketDescriptor = 0;
     }
 }
 

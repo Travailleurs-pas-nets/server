@@ -11,10 +11,13 @@
 /** Generic constants */
 #define MAX_CHANNEL_COUNT 5
 #define MAX_CHANNEL_SUBSCRIBERS_COUNT 10
-#define MAX_THREAD_INACTIVITY_TIME 3000 // 5 minutes
-#define PORT_NUMBER 5000
+#define MAX_THREAD_INACTIVITY_TIME 300 // 5 minutes
+#define PORT_NUMBER 5327
 #define REQUEST_QUEUE_SIZE 5
-#define MODE LL_PROD
+#define MODE LL_DEBUG
+#define TREATMENT_EXECUTED 0
+#define TREATMENT_NOT_EXECUTED 1
+#define TREATMENT_DISCONNECTED 2
 
 /** Defining eco-score computation constants */
 #define ECO_MAX 100
@@ -54,5 +57,5 @@ struct request {
     /** The global lua thread, giving access to dictionary functions. */
     lua_State *L;
     /** The transfer socket thanks to which the server will be able to discuss with the client. */
-    int *transferSocket;
+    int transferSocket;
 };
